@@ -4,6 +4,8 @@ import { Readable } from 'node:stream';
 import { join } from 'node:path';
 import { addArticle, listArticles, getArticle, publicSettings, settings, saveSettings, resetSettings, queueArticle, patchArticle, deleteArticle, articleDir } from '@redread/core/db';
 import { busy } from '@redread/core/types';
+import { reprocessArticle } from '@redread/core/db';
+import { languageVoices } from '@redread/core/language';
 import { extractArticle } from '@redread/core/extract';
 import { extensionOrigin, extensionImport } from '@redread/core/extension-access';
 export const runtime = 'nodejs';
@@ -16,6 +18,7 @@ const settingsSchema = z.object({
   llmKey: z.string().max(2000).optional(), ttsKey: z.string().max(2000).optional(),
   clearLlmKey: z.boolean().optional(), clearTtsKey: z.boolean().optional(),
   prompt: z.string().trim().min(1).max(20000), voice:z.string().trim().max(200),
+  languageVoices: z.record(z.string(),z.string()).optional(),
   publicUrl: z.union([httpUrl,z.literal('')]), feedTitle:z.string().trim().min(1).max(200),
   articleConcurrency: z.number().int().min(1).max(8),
   llmConcurrency: z.number().int().min(1).max(32),
@@ -43,6 +46,7 @@ async function handleRequest(req: Request, context: Context) {
     if (resource === 'settings' && req.method === 'PUT') {
       const input = settingsSchema.parse(await req.json()); const current = settings();
       const {clearLlmKey,clearTtsKey,...values} = input;
+      values.languageVoices=languageVoices(input.languageVoices ?? current.languageVoices);
       saveSettings({...current,...values,llmKey:clearLlmKey ? '' : input.llmKey || current.llmKey, ttsKey:clearTtsKey ? '' : input.ttsKey || current.ttsKey});
       return json(publicSettings());
     }
@@ -63,7 +67,7 @@ async function handleRequest(req: Request, context: Context) {
     if (action === 'audio' && (req.method === 'GET' || req.method === 'HEAD')) {
       if (article.status !== 'ready') return json({error:'Audio ist noch nicht fertig.'},404);
       const file = join(articleDir(id),'episode.mp3'); const size = statSync(file).size;
-      const headers: Record<string,string> = {'Content-Type':'audio/mpeg','Accept-Ranges':'bytes','Cache-Control':'private, max-age=3600','Content-Disposition':`inline; filename="redread-${id}.mp3"`};
+      const headers: Record<string,string> = {'Content-Type':'audio/mpeg','Accept-Ranges':'bytes','Cache-Control':'private, no-cache','Content-Disposition':`inline; filename="redread-${id}.mp3"`};
       let start=0,end=size-1; const range=req.headers.get('range');
       if (range) {
         const match=/^bytes=(\d*)-(\d*)$/.exec(range);
@@ -77,6 +81,7 @@ async function handleRequest(req: Request, context: Context) {
       return new Response(req.method === 'HEAD' ? null : Readable.toWeb(createReadStream(file,{start,end})) as ReadableStream, {status:range?206:200,headers});
     }
     if (action === 'process' && req.method === 'POST') return json(queueArticle(id));
+    if (action === 'reprocess' && req.method === 'POST') return json(reprocessArticle(id));
     if (!action && req.method === 'GET') return json(article);
     if (!action && req.method === 'PATCH') {
       if (busy(article.status) || article.status === 'ready') return json({error:'Nur Entwürfe und fehlgeschlagene Artikel können bearbeitet werden.'},409);

@@ -3,6 +3,7 @@ import { Agent, fetch } from 'undici';
 import ipaddr from 'ipaddr.js';
 import { JSDOM } from 'jsdom';
 import { Readability } from '@mozilla/readability';
+import { articleTextFromDocument } from './text';
 
 export function isPublicAddress(address: string) {
   try { return ipaddr.process(address).range() === 'unicast'; } catch { return false; }
@@ -46,7 +47,10 @@ export async function extractArticle(input: string) {
     const dom = new JSDOM(Buffer.concat(chunks).toString('utf8'), {url: url.href});
     try {
       const parsed = new Readability(dom.window.document).parse();
-      const original = parsed?.textContent?.trim();
+      const content = new JSDOM(parsed?.content || '');
+      let original: string;
+      try { original = articleTextFromDocument(content.window.document); }
+      finally { content.window.close(); }
       if (!original || original.length < 80) throw new Error('Keinen lesbaren Artikel gefunden. Bitte den Artikeltext direkt einfügen.');
       if (original.length > 200_000) throw new Error('Der Artikel ist zu lang (maximal 200.000 Zeichen).');
       return {title: (parsed?.title || url.hostname).slice(0,300), original, source: url.hostname.replace(/^www\./,''), url: url.href};

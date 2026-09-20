@@ -6,12 +6,15 @@ import { promisify } from 'node:util';
 import { Article, Settings } from './types';
 import { articleDir, patchArticle, settings } from './db';
 import { createLimiter, mapConcurrent } from './concurrency';
+import { languagePrompt, parseDetectedLanguage, voiceForLanguage } from './language';
+import { normalizeArticleText } from './text';
 const exec = promisify(execFile);
 // Global within the single worker process, not multiplied by active articles.
 const llmSlot = createLimiter(() => settings().llmConcurrency);
 const ttsSlot = createLimiter(() => settings().ttsConcurrency);
 
-export function splitText(text: string, limit = 3000): string[] {
+export function splitText(text: string, limit = 3000, targetParts = 1): string[] {
+  if (!Number.isInteger(targetParts) || targetParts < 1) throw new Error('Ungültige Zielzahl für Textabschnitte.');
   const parts: string[] = [];
   let remaining = text.trim();
   while (remaining.length > limit) {
@@ -23,7 +26,29 @@ export function splitText(text: string, limit = 3000): string[] {
     remaining = remaining.slice(cut + 1).trim();
   }
   if (remaining) parts.push(remaining);
+  const segmenter = new Intl.Segmenter('de', {granularity:'sentence'});
+  while (parts.length < targetParts) {
+    const candidates = parts.map((part,index) => ({part,index})).sort((a,b) => b.part.length-a.part.length);
+    let divided = false;
+    for (const {part,index} of candidates) {
+      let boundaries = Array.from(segmenter.segment(part), segment => segment.index).filter(i => i > 0);
+      if (!boundaries.length) boundaries = Array.from(part.matchAll(/\s+/g), match => match.index!).filter(i => i > 0);
+      if (!boundaries.length) continue;
+      const midpoint = part.length/2;
+      const cut = boundaries.reduce((best,value) => Math.abs(value-midpoint)<Math.abs(best-midpoint)?value:best);
+      parts.splice(index,1,part.slice(0,cut).trim(),part.slice(cut).trim());
+      divided = true;
+      break;
+    }
+    if (!divided) break; // A single word cannot be split usefully.
+  }
   return parts;
+}
+export function splitSpeech(text: string, concurrency: number): string[] {
+  if (!Number.isInteger(concurrency) || concurrency < 1) throw new Error('Ungültige TTS-Parallelität.');
+  // Preserve the provider's maximum chunk size, then supply enough work even
+  // when the whole script is under 3000 characters.
+  return splitText(text, 3000, concurrency);
 }
 async function provider(url: string, path: string, key: string, body: object, headers: Record<string,string> = {}) {
   const response = await fetch(path ? `${url.replace(/\/$/, '')}/${path}` : url, {
@@ -64,14 +89,26 @@ export function speech(s: Settings, text: string) {
   }
   return provider(s.ttsUrl, 'audio/speech', s.ttsKey, {model: s.ttsModel, voice: s.voice, input: text, response_format: 'mp3'});
 }
+export async function detectLanguage(s: Settings, original: string): Promise<string> {
+  const text=normalizeArticleText(original);
+  const sample=text.length<=6000?text:[text.slice(0,2000),text.slice(Math.floor(text.length/2)-1000,Math.floor(text.length/2)+1000),text.slice(-2000)].join('\n\n[...]\n\n');
+  return parseDetectedLanguage(await llmSlot(()=>prepareText({...s,prompt:languagePrompt},sample)));
+}
 export async function processArticle(article: Article) {
   const s = settings();
   const dir = articleDir(article.id);
-  const recipe = {llmUrl: s.llmUrl, llmModel: s.llmModel, prompt: s.prompt, ttsProvider: s.ttsProvider, ttsUrl: s.ttsUrl, ttsModel: s.ttsModel, voice: s.voice};
+  let language=article.language;
+  if (!language) {
+    patchArticle(article.id,{progress:'Sprache erkennen'});
+    language=await detectLanguage(s,article.original);
+    patchArticle(article.id,{language});
+  }
+  s.voice=voiceForLanguage(language,s.languageVoices,s.voice);
+  const recipe = {llmUrl: s.llmUrl, llmModel: s.llmModel, prompt: s.prompt, ttsProvider: s.ttsProvider, ttsUrl: s.ttsUrl, ttsModel: s.ttsModel, voice: s.voice, language};
   patchArticle(article.id, {recipe: JSON.stringify(recipe)});
   let script = article.script;
   if (!script) {
-    const parts = splitText(article.original, s.llmChunkChars);
+    const parts = splitText(article.original, s.llmChunkChars, s.llmConcurrency);
     const pending = new Map<string, Promise<string>>();
     let completed = 0;
     patchArticle(article.id, {progress: `Hörfassung · 0 von ${parts.length} Abschnitten fertig`});
@@ -96,7 +133,7 @@ export async function processArticle(article: Article) {
     patchArticle(article.id, {script});
   }
   patchArticle(article.id, {status: 'speaking'});
-  const parts = splitText(script);
+  const parts = splitSpeech(script, settings().ttsConcurrency);
   const pendingAudio = new Map<string, Promise<string>>();
   let completedAudio = 0;
   patchArticle(article.id, {progress: `Audio · 0 von ${parts.length} Abschnitten fertig`});
