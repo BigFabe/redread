@@ -1,0 +1,14 @@
+node_modules/
+.next/
+data/
+.env
+.env.*
+!.env.example
+*.tsbuildinfo
+.playwright-cli/
+test-results/
+playwright-report/
+apps/extension/dist/
+apps/extension/artifacts/
+apps/extension/web-ext-artifacts/
+apps/web/public/extensions/

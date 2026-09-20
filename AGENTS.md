@@ -1,0 +1,2 @@
+- expose den dev server via Tailscale
+- Halte die Konfigurationsoptionen in `.env` und den Einstellungen der Webapp synchron: Neue oder geänderte Optionen müssen an beiden Stellen verfügbar sein. `.env` ist dauerhaft; Webapp-Einstellungen überschreiben sie nur temporär bis zum Worker-Neustart.

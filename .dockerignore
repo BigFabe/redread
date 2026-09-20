@@ -1,0 +1,12 @@
+.git
+node_modules
+**/node_modules
+**/.next
+**/*.tsbuildinfo
+data
+.env*
+.playwright-cli
+test-results
+apps/extension/dist
+apps/extension/artifacts
+apps/extension/web-ext-artifacts

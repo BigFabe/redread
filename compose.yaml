@@ -1,0 +1,22 @@
+services:
+  web:
+    build: .
+    image: redread:local
+    ports:
+      - "127.0.0.1:3210:3210"
+    env_file: .env
+    environment:
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:3210}
+    volumes:
+      - redread-data:/data
+    restart: unless-stopped
+  worker:
+    image: redread:local
+    build: .
+    command: ["npm", "run", "worker"]
+    env_file: .env
+    volumes:
+      - redread-data:/data
+    restart: unless-stopped
+volumes:
+  redread-data:

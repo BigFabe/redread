@@ -1,0 +1,6 @@
+{
+  "name": "redread", "private": true, "type": "module", "workspaces": ["apps/*", "packages/*"],
+  "engines": {"node": ">=24.0.0"},
+  "scripts": {"dev": "npm run dev -w @redread/web", "build": "npm run build -w @redread/web", "start": "npm run start -w @redread/web", "worker": "npm run start -w @redread/worker", "typecheck": "tsc --noEmit -p apps/web/tsconfig.json && npm run typecheck -w @redread/extension", "extension:build": "npm run build -w @redread/extension", "test": "npm run extension:build && tsx --test tests/*.test.ts", "test:extension": "node tests/extension-browser.mjs"},
+  "devDependencies": {"tsx": "^4.20.0", "typescript": "^5.9.0", "@types/node": "^24.0.0", "@playwright/test": "^1.55.0"}
+}
