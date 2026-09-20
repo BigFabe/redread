@@ -7,6 +7,7 @@ import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { JSDOM } from 'jsdom';
+import { languagePrompt } from '../packages/core/src/language';
 const temp=mkdtempSync(join(tmpdir(),'redread-test-'));
 process.env.DATA_DIR=temp;
 process.env.REDREAD_ENV_FILE=''; // Never load real credentials or providers during tests.
@@ -24,6 +25,7 @@ const model=createServer(async(req,res)=>{
   let body='';for await(const chunk of req)body+=chunk;
   const data=JSON.parse(body);
   if(req.url==='/v1/chat/completions'){
+    if(data.messages[0].content===languagePrompt){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({choices:[{message:{content:'{"language":"de"}'},finish_reason:'stop'}]}));return;}
     if(slowLlm){peakLlm=Math.max(peakLlm,++activeLlm);await new Promise(r=>setTimeout(r,250));activeLlm--;}
     llmCalls++;assert.equal(data.model,'test-llm');res.setHeader('Content-Type','application/json');res.end(JSON.stringify({choices:[{message:{content:'Eine gut vorlesbare Hörfassung des Testartikels.'},finish_reason:'stop'}]}));
   }else if(req.url==='/v1/audio/speech'){
@@ -155,16 +157,19 @@ test('web API, persistence, failure recovery, RSS and ranged audio',async()=>{
   assert.equal(draft.status,201);const id=draft.data.id;
   assert.equal(draft.data.status,'draft');assert.equal((await request(`/api/articles/${id}/process`,'POST',{})).status,400);
   const addr=model.address() as {port:number};
-  const saved=await request('/api/settings','PUT',{...first.data,llmUrl:`http://127.0.0.1:${addr.port}/v1`,ttsUrl:`http://127.0.0.1:${addr.port}/v1`,llmModel:'test-llm',ttsModel:'test-tts',llmKey:'test-secret',ttsKey:'test-secret-2',publicUrl:base});
+  const saved=await request('/api/settings','PUT',{...first.data,llmUrl:`http://127.0.0.1:${addr.port}/v1`,ttsUrl:`http://127.0.0.1:${addr.port}/v1`,llmModel:'test-llm',ttsModel:'test-tts',llmKey:'test-secret',ttsKey:'test-secret-2',publicUrl:base,ttsConcurrency:1,languageVoices:{de:'german-test'}});
   assert.equal((await request('/api/settings','PUT',{...saved.data,llmConcurrency:0})).status,400);
   assert.equal((await request('/api/settings','PUT',{...saved.data,llmChunkChars:999})).status,400);
+  assert.equal((await request('/api/settings','PUT',{...saved.data,languageVoices:{'not a code':'x'}})).status,400);
+  assert.equal((await request('/api/settings','PUT',{...saved.data,languageVoices:{de:''}})).status,400);
+  assert.deepEqual(saved.data.languageVoices,{de:'german-test'});
   assert.equal(saved.status,200);assert.equal(saved.data.llmKey,'');assert.equal(saved.data.hasLlmKey,true);
   assert(!JSON.stringify(saved.data).includes('test-secret'));
   assert.equal((await request('/api/settings','PUT',saved.data)).data.hasLlmKey,true);
   assert.equal((await request(`/api/articles/${id}/process`,'POST',{})).status,200);
   await until(async()=>(await request(`/api/articles/${id}`)).data.status==='failed');
   const failed=(await request(`/api/articles/${id}`)).data;
-  assert.match(failed.error,/503/);assert(failed.script);assert.equal(llmCalls,1);
+  assert.equal(failed.language,'de');assert.equal(JSON.parse(failed.recipe).voice,'german-test');assert.match(failed.error,/503/);assert(failed.script);assert.equal(llmCalls,3);
   assert.equal(readFileSync(join(temp,'articles',id,'original.txt'),'utf8'),draft.data.original);
   assert.equal(readFileSync(join(temp,'articles',id,'script.txt'),'utf8'),failed.script);
   const newScript='Diese von Hand angepasste Hörfassung bleibt gespeichert.';
@@ -173,7 +178,7 @@ test('web API, persistence, failure recovery, RSS and ranged audio',async()=>{
   assert.equal((await request(`/api/articles/${id}/process`,'POST',{})).status,200);
   await until(async()=>(await request(`/api/articles/${id}`)).data.status==='ready');
   const ready=(await request(`/api/articles/${id}`)).data;
-  assert.equal(llmCalls,1);assert.equal(ttsCalls,2);assert.equal(ready.script,newScript);assert(ready.audioBytes>0);assert(ready.duration>0);
+  assert.equal(llmCalls,3);assert.equal(ttsCalls,2);assert.equal(ready.script,newScript);assert(ready.audioBytes>0);assert(ready.duration>0);
   assert.equal((await request(`/api/articles/${id}`,'PATCH',{script:'cannot overwrite published audio'})).status,409);
   const list=(await request('/api/articles')).data;assert.equal(list.length,1);assert.equal(list[0].hasScript,true);assert.equal(list[0].original,undefined);
   const feed=await (await fetch(base+'/feed.xml')).text();
@@ -188,7 +193,7 @@ test('web API, persistence, failure recovery, RSS and ranged audio',async()=>{
 });
 test('worker applies temporary article and LLM limits without restart',async()=>{
   slowLlm=true;
-  for(const [articleConcurrency,llmConcurrency,expected] of [[1,3,1],[2,1,1],[2,3,2]]){
+  for(const [articleConcurrency,llmConcurrency,expected] of [[1,3,3],[2,1,1],[2,3,3]]){
     peakLlm=0;
     const current=(await request('/api/settings')).data;
     assert.equal((await request('/api/settings','PUT',{...current,articleConcurrency,llmConcurrency})).status,200);

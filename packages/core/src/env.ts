@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { loadEnvFile } from 'node:process';
 import type { Settings } from './types';
+import { languageVoices } from './language';
 
 // Web/worker workspace commands and direct commands from the repository root.
 const paths = process.env.REDREAD_ENV_FILE !== undefined
@@ -29,7 +30,11 @@ const names = {
   prompt: 'LLM_PROMPT', publicUrl: 'PUBLIC_URL', feedTitle: 'FEED_TITLE',
 } as const;
 export function environmentSettings(): Partial<Settings> {
-  const result: Record<string,string | number> = {};
+  const result: Record<string,string | number | Record<string,string>> = {};
+  if (process.env.TTS_LANGUAGE_VOICES !== undefined) {
+    try { result.languageVoices=languageVoices(JSON.parse(process.env.TTS_LANGUAGE_VOICES)); }
+    catch { throw new Error('TTS_LANGUAGE_VOICES muss eine gültige JSON-Zuordnung sein, z. B. {"de":"stimme-de","en":"stimme-en"}.'); }
+  }
   for (const [field, variable] of Object.entries(names)) {
     if (process.env[variable] !== undefined) result[field] = process.env[variable]!;
   }
