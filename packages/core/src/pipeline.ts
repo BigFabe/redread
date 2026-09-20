@@ -103,7 +103,7 @@ export async function processArticle(article: Article) {
     language=await detectLanguage(s,article.original);
     patchArticle(article.id,{language});
   }
-  s.voice=voiceForLanguage(language,s.languageVoices,s.voice);
+  s.voice=article.voice||voiceForLanguage(language,s.languageVoices,s.voice);
   const recipe = {llmUrl: s.llmUrl, llmModel: s.llmModel, prompt: s.prompt, ttsProvider: s.ttsProvider, ttsUrl: s.ttsUrl, ttsModel: s.ttsModel, voice: s.voice, language};
   patchArticle(article.id, {recipe: JSON.stringify(recipe)});
   let script = article.script;

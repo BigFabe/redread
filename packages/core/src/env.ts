@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { loadEnvFile } from 'node:process';
 import type { Settings } from './types';
 import { languageVoices } from './language';
+import { customVoices } from './voices';
 
 // Web/worker workspace commands and direct commands from the repository root.
 const paths = process.env.REDREAD_ENV_FILE !== undefined
@@ -30,7 +31,11 @@ const names = {
   prompt: 'LLM_PROMPT', publicUrl: 'PUBLIC_URL', feedTitle: 'FEED_TITLE',
 } as const;
 export function environmentSettings(): Partial<Settings> {
-  const result: Record<string,string | number | Record<string,string>> = {};
+  const result: Record<string,unknown> = {};
+  if(process.env.TTS_CUSTOM_VOICES!==undefined){
+    try{result.customVoices=customVoices(JSON.parse(process.env.TTS_CUSTOM_VOICES));}
+    catch(error){throw new Error(`TTS_CUSTOM_VOICES: ${(error as Error).message}`);}
+  }
   if (process.env.TTS_LANGUAGE_VOICES !== undefined) {
     try { result.languageVoices=languageVoices(JSON.parse(process.env.TTS_LANGUAGE_VOICES)); }
     catch { throw new Error('TTS_LANGUAGE_VOICES muss eine gültige JSON-Zuordnung sein, z. B. {"de":"stimme-de","en":"stimme-en"}.'); }

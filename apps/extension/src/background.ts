@@ -1,4 +1,4 @@
-import {ext,hostPermission,serverUrl,submissionKey,type Capture,type Submission} from './shared';
+import {ext,hostPermission,serverUrl,normalizeServerUrl,submissionKey,type Capture,type Submission} from './shared';
 const pending=new Map<number,Promise<Submission>>();
 
 async function request(base:string,path:string,body?:object) {
@@ -12,17 +12,17 @@ async function request(base:string,path:string,body?:object) {
   if(!response.ok)throw new Error(typeof data.error==='string'?data.error:`Serverfehler: HTTP ${response.status}`);
   return data;
 }
-export async function checkConnection() {
-  const base=await serverUrl();
+export async function checkConnection(address?:string) {
+  const base=address===undefined?await serverUrl():normalizeServerUrl(address);
   const data=await request(base,'/api/health');
   if(data.app!=='redread')throw new Error('Unter dieser Adresse antwortet kein redread-Server.');
   return {ready:!!data.ready};
 }
-export function submitTab(tabId:number):Promise<Submission> {
+export function submitTab(tabId:number,voice=''):Promise<Submission> {
   const existing=pending.get(tabId);if(existing)return existing;
-  const job=saveTab(tabId).finally(()=>pending.delete(tabId));pending.set(tabId,job);return job;
+  const job=saveTab(tabId,voice).finally(()=>pending.delete(tabId));pending.set(tabId,job);return job;
 }
-async function saveTab(tabId:number):Promise<Submission> {
+async function saveTab(tabId:number,voice:string):Promise<Submission> {
   const base=await serverUrl();
   const tab=await ext.tabs.get(tabId);
   if(!tab.url||!/^https?:\/\//.test(tab.url))throw new Error('Bitte eine normale Artikelseite öffnen. Browserseiten, PDFs und Add-on-Stores können nicht ausgelesen werden.');
@@ -30,7 +30,11 @@ async function saveTab(tabId:number):Promise<Submission> {
   const previous=(await ext.storage.local.get(key))[key] as Submission|undefined;
   if(previous?.state==='saved'&&previous.url===tab.url&&previous.serverUrl===base)return previous;
   const submission:Submission={url:tab.url,title:tab.title||'Artikel',state:'sending',message:'Artikel auslesen und übertragen …',serverUrl:base,updatedAt:Date.now()};
-  const save=async()=>{submission.updatedAt=Date.now();await ext.storage.local.set({[key]:submission});};
+  const save=async()=>{
+    // Do not restore a submission after the user disconnected in the popup.
+    if((await ext.storage.local.get('serverUrl')).serverUrl!==base)return;
+    submission.updatedAt=Date.now();await ext.storage.local.set({[key]:submission});
+  };
   await save();
   try{
     let results:chrome.scripting.InjectionResult<Capture | {error:string}>[];
@@ -42,7 +46,7 @@ async function saveTab(tabId:number):Promise<Submission> {
     // Do not accidentally submit a different page if the user navigated during extraction.
     const current=await ext.tabs.get(tabId);
     if(current.url!==tab.url)throw new Error('Die Seite hat sich geändert. Bitte die Erweiterung erneut öffnen.');
-    const saved=await request(base,'/api/articles',{...article,process:true});
+    const saved=await request(base,'/api/articles',{...article,process:true,voice});
     if(typeof saved.id!=='string'||!/^[a-f0-9-]{36}$/.test(saved.id))throw new Error('Ungültige Antwort des Servers. Bitte vor erneutem Senden die Bibliothek prüfen.');
     submission.state='saved';submission.title=article.title;submission.articleId=saved.id;
     submission.message=saved.status==='draft'?'Als Entwurf gespeichert. Verbinde in der Webapp ein LLM und ein TTS-Modell, um Audio zu erstellen.':'Artikel gespeichert. Die Audioverarbeitung läuft auf deinem Server weiter.';
@@ -56,8 +60,9 @@ ext.runtime.onMessage.addListener((payload,sender,sendResponse)=>{
   // No messages from arbitrary websites or injected content scripts.
   if(sender.id!==ext.runtime.id||!sender.url?.startsWith(ext.runtime.getURL('')))return false;
   let task:Promise<unknown>;
-  if(payload?.type==='check')task=checkConnection();
-  else if(payload?.type==='submit'&&Number.isInteger(payload.tabId))task=submitTab(payload.tabId);
+  if(payload?.type==='check')task=checkConnection(typeof payload.serverUrl==='string'?payload.serverUrl:undefined);
+  else if(payload?.type==='voices')task=serverUrl().then(base=>request(base,'/api/voices'));
+  else if(payload?.type==='submit'&&Number.isInteger(payload.tabId))task=submitTab(payload.tabId,typeof payload.voice==='string'?payload.voice:'');
   else return false;
   void task.then(data=>sendResponse({ok:true,data}),error=>sendResponse({ok:false,error:error instanceof Error?error.message:'Anfrage fehlgeschlagen.'}));
   return true;

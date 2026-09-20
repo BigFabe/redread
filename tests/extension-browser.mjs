@@ -44,15 +44,16 @@ try{
           const connection=await checkConnection();if(!connection.ready)throw new Error('Health check failed');
           const tab=await ext.tabs.create({url:${JSON.stringify(fixtureUrl+'/article')},active:true});
           for(let i=0;i<100;i++){const loaded=await ext.tabs.get(tab.id);if(loaded.status==='complete'&&loaded.url===${JSON.stringify(fixtureUrl+'/article')})break;await sleep(50);}
-          const [first,second]=await Promise.all([submitTab(tab.id),submitTab(tab.id)]);
+          const [first,second]=await Promise.all([submitTab(tab.id,'custom-reference'),submitTab(tab.id,'custom-reference')]);
           if(first.state!=='saved'||first.articleId!==second.articleId)throw new Error(first.message||'Duplicate import');
           const article=await(await fetch(${JSON.stringify(base)}+'/api/articles/'+first.articleId)).json();
+          if(article.voice!=='custom-reference')throw new Error('Custom voice was not saved');
           if(article.status!=='queued')throw new Error('Processing not queued: '+article.status);
           if(!article.original.includes('Dieser Absatz wurde erst im Browser erzeugt.'))throw new Error('Rendered DOM was not captured');
           if(article.original.includes('do-not-send-me'))throw new Error('Form value leaked');
           const repeat=await submitTab(tab.id);if(repeat.articleId!==first.articleId)throw new Error('Repeated submit duplicated');
           const state=await ext.storage.local.get('submission:'+tab.id);if(state['submission:'+tab.id].state!=='saved')throw new Error('Status missing');
-          result={ok:true,id:first.articleId,title:article.title,popup:ext.runtime.getURL('popup.html'),options:ext.runtime.getURL('options.html')};
+          result={ok:true,id:first.articleId,title:article.title,popup:ext.runtime.getURL('popup.html')};
         }catch(error){result={ok:false,error:error.message};}
         await fetch(${JSON.stringify(fixtureUrl+'/result/'+browser)},{method:'POST',body:JSON.stringify(result)});
       })();
@@ -71,11 +72,17 @@ try{
         await expect(popup.getByRole('button',{name:'✓ In deiner Bibliothek'})).toBeDisabled();
         await expect(popup.getByRole('link',{name:'Artikel in redread öffnen ↗'})).toHaveAttribute('href',new RegExp('article='+results.get(browser).id));
         await popup.screenshot({path:'/tmp/redread-extension-popup.png'});
-        const options=await context.newPage();await options.goto(results.get(browser).options);
-        await expect(options.getByLabel('Adresse deiner redread-Webapp')).toHaveValue(base);
-        await options.getByRole('button',{name:'Speichern & verbinden'}).click();
-        await expect(options.getByRole('status')).toContainText('Verbunden.');
-        await options.screenshot({path:'/tmp/redread-extension-options.png'});
+        await popup.getByRole('button',{name:'Einstellungen',exact:true}).click();
+        await expect(popup.getByLabel('Adresse deiner redread-Webapp')).toHaveValue(base);
+        await popup.getByRole('button',{name:'Speichern & verbinden'}).click();
+        await expect(popup.getByRole('heading',{name:'Ein echter Browserartikel'})).toBeVisible();
+        await popup.getByRole('button',{name:'Einstellungen',exact:true}).click();
+        await popup.screenshot({path:'/tmp/redread-extension-settings.png'});
+        // Required test-only host grants cannot be revoked like optional grants.
+        await popup.evaluate(()=>{chrome.permissions.remove=async()=>true;});
+        await popup.getByRole('button',{name:'Ausloggen',exact:true}).click();
+        await expect(popup.getByLabel('Adresse deiner redread-Webapp')).toHaveValue('');
+        await expect(popup.getByRole('button',{name:'Einstellungen',exact:true})).toBeHidden();
       }finally{await context.close();}
     }else{
       const runner=spawn(process.execPath,['node_modules/web-ext/bin/web-ext.js','run','--source-dir',dir,'--firefox',process.env.FIREFOX_PATH||firefox.executablePath(),'--no-reload','--no-input','--no-config-discovery','--args=-headless'],{stdio:['ignore','pipe','pipe']});children.push(runner);

@@ -6,6 +6,7 @@ import { addArticle, listArticles, getArticle, publicSettings, settings, saveSet
 import { busy } from '@redread/core/types';
 import { reprocessArticle } from '@redread/core/db';
 import { languageVoices } from '@redread/core/language';
+import { customVoices } from '@redread/core/voices';
 import { extractArticle } from '@redread/core/extract';
 import { extensionOrigin, extensionImport } from '@redread/core/extension-access';
 export const runtime = 'nodejs';
@@ -19,6 +20,7 @@ const settingsSchema = z.object({
   clearLlmKey: z.boolean().optional(), clearTtsKey: z.boolean().optional(),
   prompt: z.string().trim().min(1).max(20000), voice:z.string().trim().max(200),
   languageVoices: z.record(z.string(),z.string()).optional(),
+  customVoices: z.array(z.object({name:z.string(),voice:z.string()})).max(100).optional(),
   publicUrl: z.union([httpUrl,z.literal('')]), feedTitle:z.string().trim().min(1).max(200),
   articleConcurrency: z.number().int().min(1).max(8),
   llmConcurrency: z.number().int().min(1).max(32),
@@ -41,24 +43,27 @@ async function handleRequest(req: Request, context: Context) {
     if (resource === 'health' && req.method === 'GET') {
       const s=settings();return json({app:'redread',version:'0.1',ready:!!s.llmModel&&!!s.ttsModel});
     }
+    if (resource === 'voices' && req.method === 'GET') return json(settings().customVoices);
     if (resource === 'settings' && req.method === 'GET') return json(publicSettings());
     if (resource === 'settings' && req.method === 'DELETE') { resetSettings(); return json(publicSettings()); }
     if (resource === 'settings' && req.method === 'PUT') {
       const input = settingsSchema.parse(await req.json()); const current = settings();
       const {clearLlmKey,clearTtsKey,...values} = input;
       values.languageVoices=languageVoices(input.languageVoices ?? current.languageVoices);
+      values.customVoices=customVoices(input.customVoices ?? current.customVoices);
       saveSettings({...current,...values,llmKey:clearLlmKey ? '' : input.llmKey || current.llmKey, ttsKey:clearTtsKey ? '' : input.ttsKey || current.ttsKey});
       return json(publicSettings());
     }
     if (resource !== 'articles') return json({error:'Nicht gefunden.'},404);
     if (!id && req.method === 'GET') return json(listArticles().map(({original,script,recipe,...a}) => ({...a,excerpt:original.slice(0,220),wordCount:original.split(/\s+/).length,hasScript:!!script})));
     if (!id && req.method === 'POST') {
-      const input = z.object({url:z.union([httpUrl,z.literal('')]).optional(), title:z.string().trim().max(300).optional(),text:z.string().trim().max(200000).optional(),process:z.boolean().optional()}).parse(await req.json());
+      const input = z.object({url:z.union([httpUrl,z.literal('')]).optional(), title:z.string().trim().max(300).optional(),text:z.string().trim().max(200000).optional(),process:z.boolean().optional(),voice:z.string().trim().max(200).optional()}).parse(await req.json());
       if (!input.text && !input.url) return json({error:'Bitte eine URL oder einen Artikeltext einfügen.'},400);
       const data = input.text
         ? {title:input.title || input.text.split('\n')[0].slice(0,100), original:input.text, url:input.url || '',source:input.url ? new URL(input.url).hostname : 'Eigener Text'}
         : await extractArticle(input.url!);
       const a = addArticle({...data,title:input.title || data.title});
+      if(input.voice)patchArticle(a.id,{voice:input.voice});
       if (input.process && settings().llmModel && settings().ttsModel) queueArticle(a.id);
       return json(getArticle(a.id),201);
     }
@@ -80,8 +85,11 @@ async function handleRequest(req: Request, context: Context) {
       headers['Content-Length']=String(end-start+1);
       return new Response(req.method === 'HEAD' ? null : Readable.toWeb(createReadStream(file,{start,end})) as ReadableStream, {status:range?206:200,headers});
     }
-    if (action === 'process' && req.method === 'POST') return json(queueArticle(id));
-    if (action === 'reprocess' && req.method === 'POST') return json(reprocessArticle(id));
+    if ((action === 'process'||action === 'reprocess') && req.method === 'POST') {
+      const body=await req.text();
+      const {voice}=z.object({voice:z.string().trim().max(200).optional()}).parse(body?JSON.parse(body):{});
+      return json(action==='process'?queueArticle(id,voice):reprocessArticle(id,voice));
+    }
     if (!action && req.method === 'GET') return json(article);
     if (!action && req.method === 'PATCH') {
       if (busy(article.status) || article.status === 'ready') return json({error:'Nur Entwürfe und fehlgeschlagene Artikel können bearbeitet werden.'},409);

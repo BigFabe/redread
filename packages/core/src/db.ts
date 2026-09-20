@@ -26,6 +26,10 @@ if (!(db.prepare('PRAGMA table_info(articles)').all() as {name:string}[]).some(c
     if (!(db.prepare('PRAGMA table_info(articles)').all() as {name:string}[]).some(column=>column.name==='language')) throw error;
   }
 }
+if (!(db.prepare('PRAGMA table_info(articles)').all() as {name:string}[]).some(column=>column.name==='voice')) {
+  try { db.exec("ALTER TABLE articles ADD COLUMN voice TEXT NOT NULL DEFAULT ''"); }
+  catch(error){if(!(db.prepare('PRAGMA table_info(articles)').all() as {name:string}[]).some(column=>column.name==='voice'))throw error;}
+}
 function temporarySettings(): Partial<Settings> {
   const row = db.prepare('SELECT data FROM settings WHERE id=1').get() as {data: string} | undefined;
   return row ? JSON.parse(row.data) : {};
@@ -69,25 +73,25 @@ export function addArticle(input: Pick<Article, 'title' | 'url' | 'source' | 'or
 }
 export function patchArticle(id: string, patch: Partial<Omit<Article, 'id'>>) {
   const entries = Object.entries(patch);
-  const allowed = new Set(['title','url','source','original','script','status','progress','error','publishedAt','duration','audioBytes','recipe','language']);
+  const allowed = new Set(['title','url','source','original','script','status','progress','error','publishedAt','duration','audioBytes','recipe','language','voice']);
   if (!entries.length || entries.some(([key]) => !allowed.has(key))) throw new Error('Ungültige Änderung.');
   db.prepare(`UPDATE articles SET ${entries.map(([key]) => `${key}=?`).join(',')} WHERE id=?`).run(...entries.map(([,v]) => v!), id);
   if (patch.script !== undefined) storeText(id, 'script', patch.script);
   return getArticle(id)!;
 }
-export function queueArticle(id: string) {
+export function queueArticle(id: string, voice?:string) {
   const s = settings();
   if (!s.llmModel || !s.ttsModel) throw new Error('Bitte zuerst LLM- und TTS-Modell in den Einstellungen eintragen.');
   const a = getArticle(id);
   if (!a) throw new Error('Artikel nicht gefunden.');
   if (busy(a.status) || a.status === 'ready') throw new Error('Dieser Artikel ist bereits in Verarbeitung oder fertig.');
-  return patchArticle(id, {status: 'queued', error: '', progress: 'Wartet auf Verarbeitung'});
+  return patchArticle(id, {status: 'queued', error: '', progress: 'Wartet auf Verarbeitung',...(voice!==undefined?{voice}:{})});
 }
 export function claimArticle() {
   return db.prepare(`UPDATE articles SET status='preparing', progress='Hörfassung vorbereiten'
     WHERE id=(SELECT id FROM articles WHERE status='queued' ORDER BY createdAt LIMIT 1) RETURNING *`).get() as unknown as Article | undefined;
 }
-export function reprocessArticle(id: string) {
+export function reprocessArticle(id: string, voice?:string) {
   const s = settings();
   if (!s.llmModel || !s.ttsModel) throw new Error('Bitte zuerst LLM- und TTS-Modell in den Einstellungen eintragen.');
   const dir = articleDir(id);
@@ -105,7 +109,7 @@ export function reprocessArticle(id: string) {
       if (!/^(?:text-[a-f0-9]+\.txt|audio-[a-f0-9]+\.mp3(?:\.tmp)?|script\.txt|episode(?:\.tmp)?\.mp3|concat\.txt)$/.test(name)) continue;
       renameSync(join(dir,name),join(archive,name)); moved.push(name);
     }
-    const result = patchArticle(id, {script:'',language:'',status:'queued',error:'',progress:'Neu verarbeiten',recipe:'',publishedAt:'',duration:0,audioBytes:0});
+    const result = patchArticle(id, {...(voice!==undefined?{voice}:{}),script:'',language:'',status:'queued',error:'',progress:'Neu verarbeiten',recipe:'',publishedAt:'',duration:0,audioBytes:0});
     db.exec('COMMIT');
     return result;
   } catch (error) {

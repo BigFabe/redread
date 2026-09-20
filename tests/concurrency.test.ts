@@ -40,7 +40,7 @@ test('parallel article pipelines keep text/audio order, global limits and cached
   const dir=mkdtempSync(join(tmpdir(),'redread-parallel-'));
   process.env.DATA_DIR=dir;process.env.REDREAD_ENV_FILE='';
   process.env.LLM_CONCURRENCY='3';process.env.TTS_CONCURRENCY='2';process.env.LLM_CHUNK_CHARS='3000';
-  const {addArticle,saveSettings,getArticle,articleDir,reprocessArticle}=await import('../packages/core/src/db');
+  const {addArticle,saveSettings,getArticle,articleDir,reprocessArticle,queueArticle}=await import('../packages/core/src/db');
   const {defaults}=await import('../packages/core/src/types');
   const {processArticle,splitText,splitSpeech}=await import('../packages/core/src/pipeline');
   const mp3=join(dir,'fixture.mp3');
@@ -162,6 +162,16 @@ test('parallel article pipelines keep text/audio order, global limits and cached
       assert.equal(JSON.parse(getArticle(item.id)!.recipe).voice,expected);
       assert.deepEqual(voices.slice(beforeVoices),[expected,expected]);
     }
+    detected='de';
+    const custom=addArticle({title:'Eigene Stimme',url:'',source:'test',original:'First sentence for recognition. Second sentence for parallel speech.'});
+    const beforeCustom=voices.length;
+    await processArticle(queueArticle(custom.id,'custom-reference'));
+    assert.equal(getArticle(custom.id)!.voice,'custom-reference');
+    assert.deepEqual(voices.slice(beforeCustom),['custom-reference','custom-reference']);
+    const auto=reprocessArticle(custom.id,'');
+    const beforeAuto=voices.length;
+    await processArticle(auto);
+    assert.deepEqual(voices.slice(beforeAuto),['german-voice','german-voice']);
   }finally{
     upstream.close();rmSync(dir,{recursive:true,force:true});
   }

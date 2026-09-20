@@ -28,12 +28,14 @@ Nach lokalem Build außerdem unter `/extensions/redread-chrome.zip` bzw. `/exten
 
 ## Einrichten und verwenden
 
-1. Erweiterung öffnen → **Server verbinden** bzw. Zahnrad.
+1. Erweiterung öffnen: Im Popup erscheint direkt das Feld für die Serveradresse.
 2. Serveradresse eintragen: `http://dein-host:3210`.
-3. **Speichern & verbinden**, den Zugriff auf den Server bestätigen. Tailscale muss verbunden sein.
-4. Artikel öffnen → redread-Symbol → **Artikel hörbar machen**.
+3. **Speichern & verbinden**, den Zugriff auf den Server bestätigen. Tailscale muss verbunden sein. Nach erfolgreicher Prüfung erscheint die Artikelansicht im selben Popup.
+4. Artikel öffnen → redread-Symbol → optional **Stimme** wählen → **Artikel hörbar machen**. Die Liste wird aus „Eigene Stimmen“ der Webapp-Einstellungen geladen. Ohne Auswahl gelten die Sprachzuordnung und Standardstimme.
 5. Die Erweiterung überträgt Titel, Quell-URL und den mit Mozilla Readability extrahierten Text der bereits geöffneten Seite. Der Server startet automatisch die LLM-/TTS-Verarbeitung.
 6. **Artikel in redread öffnen** führt direkt zur Artikelansicht. Fehlen Modelle, wird stattdessen ein Entwurf gespeichert und dies angezeigt.
+
+Das Zahnrad öffnet die Einstellungen direkt im Popup, ohne zusätzliche Seite. **Ausloggen** entfernt die Serveradresse, lokale Übertragungsstatus und Serverberechtigungen und zeigt wieder das leere Adressfeld. Bereits gespeicherte Artikel auf dem Server bleiben erhalten; laufende serverseitige Audioverarbeitung wird nicht abgebrochen.
 
 Das Popup darf nach dem Senden geschlossen werden; die Übertragung läuft im Hintergrund und die eigentliche Audioverarbeitung auf dem Server. Der letzte Übertragungsstatus bleibt pro Tab erhalten. Während der Übertragung werden doppelte Klicks zusammengefasst. Ein bereits erfolgreich gespeicherter Artikel wird im selben Tab und unter derselben URL nicht erneut gesendet. Nach einem unklaren Netzwerkfehler vor erneutem Senden die Bibliothek prüfen: Der Server könnte die Anfrage bereits erhalten haben.
 
@@ -85,6 +87,6 @@ npm run test:extension
 
 `test:extension` verwendet ein isoliertes Datenverzeichnis und echte Chromium-/Firefox-Erweiterungs-APIs. Kein Worker und keine externen Modellaufrufe. Firefox wird über `web-ext` temporär installiert, Chromium über einen separaten Profilordner. Bei Bedarf `CHROMIUM_PATH` oder `FIREFOX_PATH` setzen.
 
-Die Testkopien erhalten ausschließlich für lokale Testseiten automatische Hostberechtigungen, um Toolbar-Klicks/Browser-Permission-Dialoge im Headless-Modus zu ersetzen. **Die Release-Pakete enthalten diese zusätzlichen Berechtigungen und Testskripte nicht.** Geprüft werden gerenderter DOM-Inhalt, Extraktion, Hintergrundübertragung zur echten redread-API, Queue-Start, Doppelklickschutz und Statusspeicherung. Options-/Popup-UI wird zusätzlich in Chromium geprüft.
+Die Testkopien erhalten ausschließlich für lokale Testseiten automatische Hostberechtigungen, um Toolbar-Klicks/Browser-Permission-Dialoge im Headless-Modus zu ersetzen. **Die Release-Pakete enthalten diese zusätzlichen Berechtigungen und Testskripte nicht.** Geprüft werden gerenderter DOM-Inhalt, Extraktion, Hintergrundübertragung zur echten redread-API, Queue-Start, Doppelklickschutz und Statusspeicherung. Popup-UI einschließlich eingebetteter Einstellungen wird zusätzlich in Chromium geprüft. Der eigenständige Test `node tests/extension-popup.mjs` prüft außerdem Ersteinrichtung, fehlgeschlagene Verbindung, Ausloggen und erneutes Öffnen ohne Webapp-Build.
 
 Firefox-Lint: keine Fehler; zwei `innerHTML`-Warnungen aus dem eingebundenen Mozilla-Readability-Code. Readability arbeitet auf einer abgetrennten Dokumentkopie; die Erweiterung sendet nur Text und setzt keinen fremden HTML-Inhalt in ihre Oberfläche ein.
