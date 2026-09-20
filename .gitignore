@@ -12,3 +12,4 @@ apps/extension/dist/
 apps/extension/artifacts/
 apps/extension/web-ext-artifacts/
 apps/web/public/extensions/
+.tmp/
