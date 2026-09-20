@@ -19,7 +19,7 @@ for(const browser of ['chrome','firefox']){
   const modules=resolve(root,'../../node_modules');
   await copyFile(join(modules,'@fontsource/dm-sans/files/dm-sans-latin-400-normal.woff2'),join(outdir,'fonts/body.woff2'));
   await copyFile(join(modules,'@fontsource/manrope/files/manrope-latin-700-normal.woff2'),join(outdir,'fonts/heading.woff2'));
-  for(const size of [16,32,48,128])await sharp(await readFile(resolve(root,'../web/app/icon.svg'))).resize(size,size).png().toFile(join(outdir,`icons/${size}.png`));
+  for(const size of [16,32,48,128])await sharp(await readFile(resolve(root,'../web/public/logo.png'))).resize(size,size,{fit:'contain',background:{r:0,g:0,b:0,alpha:0}}).png().toFile(join(outdir,`icons/${size}.png`));
   const specific=browser==='chrome'?{minimum_chrome_version:'120',background:{service_worker:'background.js'}}:{background:{scripts:['background.js']},browser_specific_settings:{gecko:{id:'redread@redread.local',strict_min_version:'142.0',data_collection_permissions:{required:['websiteContent','browsingActivity']}}}};
   await writeFile(join(outdir,'manifest.json'),JSON.stringify({...manifest,...specific},null,2)+'\n');
   const notices=await Promise.all([

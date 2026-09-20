@@ -1,5 +1,7 @@
 # redread
 
+<img src="apps/web/public/logo.png" alt="redread – Deine Artikel. Zum Hören." width="160">
+
 Persönliche Artikelbibliothek mit LLM-Hörfassung, TTS und Podcastfeed. Single-User-Prototyp ohne Anmeldung. Browsererweiterungen für Chrome und Firefox sind enthalten; die Android-App ist noch nicht umgesetzt.
 
 ## Zugriff und Betrieb
