@@ -10,3 +10,4 @@ test-results
 apps/extension/dist
 apps/extension/artifacts
 apps/extension/web-ext-artifacts
+.tmp
