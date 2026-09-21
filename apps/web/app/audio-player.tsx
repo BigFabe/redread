@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useRef, useState, type CSSProperties, type RefObject } from 'react';
 import { AudioLines, Download, LoaderCircle, Pause, Play, Volume2, VolumeX, X } from 'lucide-react';
-import type { Article } from '@redread/core/types';
+import type { PlayableArticle } from '@redread/core/types';
 
 const timestamp = (seconds: number) => {
   const value = Math.max(0, Math.floor(seconds || 0));
@@ -19,10 +19,11 @@ function SkipIcon({forward=false}:{forward?:boolean}) {
 }
 
 export default function AudioPlayer({ article, onClose, onOpen, audioRef, onPausedChange }: {
-  article: Article; onClose: () => void; onOpen: () => void;
+  article: PlayableArticle; onClose: () => void; onOpen: () => void;
   audioRef: RefObject<HTMLAudioElement|null>; onPausedChange: (paused: boolean) => void;
 }) {
   const audio = audioRef;
+  const audioUrl = `/api/articles/${article.id}/audio?${article.versionId?`version=${encodeURIComponent(article.versionId)}`:`v=${encodeURIComponent(article.publishedAt)}`}`;
   const [paused, setPaused] = useState(true);
   const [waiting, setWaiting] = useState(false);
   const [position, setPosition] = useState(0);
@@ -64,7 +65,7 @@ export default function AudioPlayer({ article, onClose, onOpen, audioRef, onPaus
   }
 
   return <section className="player-bar" aria-label="Audioplayer">
-    <audio ref={audio} src={`/api/articles/${article.id}/audio?v=${encodeURIComponent(article.publishedAt)}`} preload="metadata"
+    <audio ref={audio} src={audioUrl} preload="metadata"
       onLoadedMetadata={updateDuration} onDurationChange={updateDuration}
       onTimeUpdate={() => setPosition(audio.current?.currentTime || 0)}
       onPlay={() => { setPaused(false); setError(''); }}
@@ -73,11 +74,11 @@ export default function AudioPlayer({ article, onClose, onOpen, audioRef, onPaus
       onCanPlay={() => setWaiting(false)} onEnded={() => { setPaused(true); setWaiting(false); }}
       onError={() => { setError('Audio konnte nicht geladen werden.'); setWaiting(false); setPaused(true); }} />
     <div className="player-main">
-      <button className="player-article" onClick={onOpen} title={article.title} aria-label={`Artikel öffnen: ${article.title}`}>
-        <AudioLines size={24}/><span><strong>{article.title}</strong><small>{article.source}</small></span>
+      <button className="player-article" onClick={onOpen} title={article.title} aria-label={`Open article: ${article.title}`}>
+        <AudioLines size={24}/><span><strong>{article.title}</strong><small>{article.source}{article.versionId&&` · Previous version · ${new Date(article.publishedAt).toLocaleString()}`}</small></span>
       </button>
       <div className="player-transport">
-        <button className="icon-button player-skip" aria-label="15 Sekunden zurück" onClick={() => seek((audio.current?.currentTime || 0) - 15)}><SkipIcon/></button>
+        <button className="icon-button player-skip" aria-label="Back 15 seconds" onClick={() => seek((audio.current?.currentTime || 0) - 15)}><SkipIcon/></button>
         <button className="player-toggle" aria-label={paused?'Abspielen':'Pausieren'} onClick={() => { if (paused) void play(); else audio.current?.pause(); }} disabled={!!error}>
           {waiting&&!paused?<LoaderCircle size={21} className="spin"/>:paused?<Play size={21} fill="currentColor"/>:<Pause size={21} fill="currentColor"/>}
         </button>
@@ -86,13 +87,13 @@ export default function AudioPlayer({ article, onClose, onOpen, audioRef, onPaus
       <div className="player-options">
         <div className="player-rate-control" ref={rateControl}>
           <button ref={rateButton} className="player-rate" aria-label={`Wiedergabetempo: ${rate.toLocaleString('de-DE')}×`} aria-expanded={rateOpen} aria-controls={rateId} onClick={() => setRateOpen(!rateOpen)}>{rate.toLocaleString('de-DE')}×</button>
-          {rateOpen&&<div id={rateId} className="player-rate-menu" role="group" aria-label="Wiedergabetempo wählen">
+          {rateOpen&&<div id={rateId} className="player-rate-menu" role="group" aria-label="Choose playback speed">
             {[0.75,1,1.25,1.5,1.75,2].map(value => <button key={value} aria-pressed={rate===value} onClick={() => { setRate(value); if(audio.current) audio.current.playbackRate=value; setRateOpen(false); rateButton.current?.focus(); }}>{value.toLocaleString('de-DE')}×</button>)}
           </div>}
         </div>
         <button className="icon-button player-mute" aria-label={muted?'Ton einschalten':'Stummschalten'} onClick={() => { if(audio.current) audio.current.muted=!muted; setMuted(!muted); }}>{muted?<VolumeX size={19}/>:<Volume2 size={19}/>}</button>
-        <a className="icon-button" href={`/api/articles/${article.id}/audio?v=${encodeURIComponent(article.publishedAt)}`} download aria-label="Audio herunterladen"><Download size={19}/></a>
-        <button className="icon-button" aria-label="Player schließen" onClick={onClose}><X size={19}/></button>
+        <a className="icon-button" href={audioUrl} download aria-label="Audio herunterladen"><Download size={19}/></a>
+        <button className="icon-button" aria-label="Close player" onClick={onClose}><X size={19}/></button>
       </div>
     </div>
     <div className="player-timeline"><time>{timestamp(position)}</time><input type="range" min={0} max={duration || 1} step={0.1} value={Math.min(position,duration || 1)} disabled={!duration||!!error} aria-label="Wiedergabeposition" aria-valuetext={`${timestamp(position)} von ${timestamp(duration)}`} style={{'--progress':`${duration?position/duration*100:0}%`} as CSSProperties} onChange={e => seek(Number(e.target.value))}/><time>{timestamp(duration)}</time></div>

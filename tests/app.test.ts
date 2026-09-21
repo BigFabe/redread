@@ -27,7 +27,7 @@ const model=createServer(async(req,res)=>{
   if(req.url==='/v1/chat/completions'){
     if(data.messages[0].content===languagePrompt){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({choices:[{message:{content:'{"language":"de"}'},finish_reason:'stop'}]}));return;}
     if(slowLlm){peakLlm=Math.max(peakLlm,++activeLlm);await new Promise(r=>setTimeout(r,250));activeLlm--;}
-    llmCalls++;assert.equal(data.model,'test-llm');res.setHeader('Content-Type','application/json');res.end(JSON.stringify({choices:[{message:{content:'Eine gut vorlesbare Hörfassung des Testartikels.'},finish_reason:'stop'}]}));
+    llmCalls++;assert.equal(data.model,'test-llm');res.setHeader('Content-Type','application/json');res.end(JSON.stringify({choices:[{message:{content:'A clear listening version of the test article.'},finish_reason:'stop'}]}));
   }else if(req.url==='/v1/audio/speech'){
     ttsCalls++;assert.equal(data.model,'test-tts');if(failTts){res.writeHead(503);res.end('temporary failure');}else{res.setHeader('Content-Type','audio/mpeg');res.end(audio);}
   }else if(req.url==='/v1/tts'){
@@ -53,7 +53,7 @@ after(async()=>{
   model.close();rmSync(temp,{recursive:true,force:true});
 });
 test('chunking preserves all words and respects model limit',()=>{
-  const input='Das ist ein vollständiger Satz. '.repeat(700);
+  const input='This is a complete sentence. '.repeat(700);
   const parts=splitText(input,3000);
   assert(parts.length>1);assert(parts.every(p=>p.length<=3000));
   assert.equal(parts.join(' ').split(/\s+/).join(' '),input.trim().split(/\s+/).join(' '));
@@ -67,12 +67,12 @@ test('article imports exclude private and special network addresses',()=>{
 test('Fish Audio sends the model header and optional reference_id',async()=>{
   const addr=model.address() as {port:number};
   const config={...defaults,ttsProvider:'fish' as const,ttsUrl:`http://127.0.0.1:${addr.port}/v1/tts`,ttsModel:'s2.1-pro-free',ttsKey:'fake-fish-key',voice:''};
-  const response=await speech(config,'Ein kurzer Test.');
+  const response=await speech(config,'A short test.');
   assert.deepEqual(Buffer.from(await response.arrayBuffer()),audio);
   assert.equal(fishRequest?.headers.model,'s2.1-pro-free');
   assert.equal(fishRequest?.headers.authorization,'Bearer fake-fish-key');
-  assert.deepEqual(fishRequest?.body,{text:'Ein kurzer Test.',format:'mp3'});
-  await (await speech({...config,voice:'reference-test'},'Andere Stimme.')).arrayBuffer();
+  assert.deepEqual(fishRequest?.body,{text:'A short test.',format:'mp3'});
+  await (await speech({...config,voice:'reference-test'},'Different voice.')).arrayBuffer();
   assert.equal(fishRequest?.body.reference_id,'reference-test');
 });
 test('LLM retries empty output once and identifies provider, length and refusal failures',async()=>{
@@ -85,21 +85,21 @@ test('LLM retries empty output once and identifies provider, length and refusal 
   const config={...defaults,llmUrl:`http://127.0.0.1:${(upstream.address() as {port:number}).port}/v1`};
   const empty={choices:[{message:{content:null,reasoning:'Not a transcript'},finish_reason:'stop'}],usage:{completion_tokens_details:{reasoning_tokens:42}}};
   try {
-    responses=[empty,{choices:[{message:{content:'  Hörfassung  '},finish_reason:'stop'}]}];
-    assert.equal(await prepareText(config,'Artikel'),'Hörfassung');assert.equal(calls,2);
+    responses=[empty,{choices:[{message:{content:'  Listening version  '},finish_reason:'stop'}]}];
+    assert.equal(await prepareText(config,'Article'),'Listening version');assert.equal(calls,2);
     calls=0;responses=[empty,empty];
-    await assert.rejects(prepareText(config,'Artikel'),/zweiten Versuch.*42 Reasoning-Tokens/);assert.equal(calls,2);
+    await assert.rejects(prepareText(config,'Article'),/second attempt.*42 reasoning tokens/);assert.equal(calls,2);
     for(const [response,pattern] of [
-      [{error:{code:503,message:'private upstream details'}},/Code 503/],
-      [{choices:[{error:{code:502},finish_reason:'error',message:{content:'partial output'}}]},/Code 502/],
-      [{choices:[{finish_reason:'length',message:{content:null}}]},/Ausgabelimit/],
-      [{choices:[{finish_reason:'content_filter',message:{content:null}}]},/Inhaltsfilter/],
+      [{error:{code:503,message:'private upstream details'}},/code 503/],
+      [{choices:[{error:{code:502},finish_reason:'error',message:{content:'partial output'}}]},/code 502/],
+      [{choices:[{finish_reason:'length',message:{content:null}}]},/output limit/],
+      [{choices:[{finish_reason:'content_filter',message:{content:null}}]},/content filter/],
     ] as const) {
-      calls=0;responses=[response];await assert.rejects(prepareText(config,'Artikel'),pattern);assert.equal(calls,1);
+      calls=0;responses=[response];await assert.rejects(prepareText(config,'Article'),pattern);assert.equal(calls,1);
     }
   } finally {upstream.close();}
 });
-test('temporary settings override .env without changing it or copying its keys',()=>{
+test('stored settings override .env without changing it or copying its keys',()=>{
   const envFile=join(temp,'test.env');
   writeFileSync(envFile,'LLM_MODEL=env-model\nLLM_API_KEY=env-secret\nTTS_VOICE=\n');
   const script=`
@@ -153,7 +153,7 @@ test('web API, persistence, failure recovery, RSS and ranged audio',async()=>{
   assert.equal((await request('/api/articles','POST',{text:'Nicht speichern'},{Origin:'https://evil.example'})).status,403);
   assert.equal((await request('/api/articles','POST',{url:'http://127.0.0.1:3211'})).status,400);
   assert.equal((await request('/api/articles','POST',{url:'file:///etc/passwd'})).status,400);
-  const draft=await request('/api/articles','POST',{url:'',title:'Test <Artikel> & Audio',text:'Ein Testartikel mit mehreren Wörtern. Der Originaltext soll unverändert erhalten bleiben.'});
+  const draft=await request('/api/articles','POST',{url:'',title:'Test <Article> & Audio',text:'A test article with several words. The original text should remain unchanged.'});
   assert.equal(draft.status,201);const id=draft.data.id;
   assert.equal(draft.data.status,'draft');assert.equal((await request(`/api/articles/${id}/process`,'POST',{})).status,400);
   const addr=model.address() as {port:number};
@@ -172,7 +172,7 @@ test('web API, persistence, failure recovery, RSS and ranged audio',async()=>{
   assert.equal(failed.language,'de');assert.equal(JSON.parse(failed.recipe).voice,'german-test');assert.match(failed.error,/503/);assert(failed.script);assert.equal(llmCalls,3);
   assert.equal(readFileSync(join(temp,'articles',id,'original.txt'),'utf8'),draft.data.original);
   assert.equal(readFileSync(join(temp,'articles',id,'script.txt'),'utf8'),failed.script);
-  const newScript='Diese von Hand angepasste Hörfassung bleibt gespeichert.';
+  const newScript='This manually edited listening version remains saved.';
   assert.equal((await request(`/api/articles/${id}`,'PATCH',{script:newScript})).status,200);
   failTts=false;
   assert.equal((await request(`/api/articles/${id}/process`,'POST',{})).status,200);
@@ -180,10 +180,16 @@ test('web API, persistence, failure recovery, RSS and ranged audio',async()=>{
   const ready=(await request(`/api/articles/${id}`)).data;
   assert.equal(llmCalls,3);assert.equal(ttsCalls,2);assert.equal(ready.script,newScript);assert(ready.audioBytes>0);assert(ready.duration>0);
   assert.equal((await request(`/api/articles/${id}`,'PATCH',{script:'cannot overwrite published audio'})).status,409);
+  const renamed=await request(`/api/articles/${id}`,'PATCH',{title:'  Renamed article  '});
+  assert.equal(renamed.status,200);assert.equal(renamed.data.title,'Renamed article');assert.equal(renamed.data.script,newScript);assert.equal(renamed.data.audioBytes,ready.audioBytes);
+  assert.equal((await request(`/api/articles/${id}`)).data.title,'Renamed article');
+  assert.equal((await request(`/api/articles/${id}`,'PATCH',{title:'  '})).status,400);
+  assert.equal((await request(`/api/articles/${id}`,'PATCH',{})).status,400);
+  assert.equal((await request(`/api/articles/${id}`,'PATCH',{title:draft.data.title})).status,200);
   const list=(await request('/api/articles')).data;assert.equal(list.length,1);assert.equal(list[0].hasScript,true);assert.equal(list[0].original,undefined);
   const feed=await (await fetch(base+'/feed.xml')).text();
   const doc=new JSDOM(feed,{contentType:'text/xml'}).window.document;
-  assert.equal(doc.querySelector('item title')?.textContent,'Test <Artikel> & Audio');assert.equal(doc.querySelector('enclosure')?.getAttribute('length'),String(ready.audioBytes));
+  assert.equal(doc.querySelector('item title')?.textContent,'Test <Article> & Audio');assert.equal(doc.querySelector('enclosure')?.getAttribute('length'),String(ready.audioBytes));
   const audioResponse=await fetch(base+`/api/articles/${id}/audio`,{headers:{Range:'bytes=0-99'}});
   assert.equal(audioResponse.status,206);assert.equal((await audioResponse.arrayBuffer()).byteLength,100);assert.match(audioResponse.headers.get('content-range')!,/^bytes 0-99\//);
   const head=await fetch(base+`/api/articles/${id}/audio`,{method:'HEAD'});assert.equal(head.status,200);assert.equal(Number(head.headers.get('content-length')),ready.audioBytes);
@@ -191,7 +197,51 @@ test('web API, persistence, failure recovery, RSS and ranged audio',async()=>{
   assert.equal((await request(`/api/articles/${id}`,'DELETE')).status,200);assert.equal((await request('/api/articles')).data.length,0);
   assert(!(await (await fetch(base+'/feed.xml')).text()).includes('<item>'));
 });
-test('worker applies temporary article and LLM limits without restart',async()=>{
+test('reprocessing preserves playable versions and distinguishes audio-only from text + audio',async()=>{
+  const created=await request('/api/articles','POST',{title:'Version history',text:'A short original article for version testing.'});
+  const id=created.data.id;
+  assert.deepEqual((await request(`/api/articles/${id}/versions`)).data,[]);
+  assert.equal((await request(`/api/articles/${id}/reprocess`,'POST',{mode:'audio'})).status,400);
+  assert.equal((await request(`/api/articles/${id}/reprocess`,'POST',{mode:'invalid'})).status,400);
+  assert.equal((await request(`/api/articles/${id}/process`,'POST',{})).status,200);
+  await until(async()=>(await request(`/api/articles/${id}`)).data.status==='ready');
+  const original=(await request(`/api/articles/${id}`)).data;
+  const originalAudio=Buffer.from(await (await fetch(base+`/api/articles/${id}/audio`)).arrayBuffer());
+  const beforeAudio={llm:llmCalls,tts:ttsCalls};
+  // A failed replacement must not make its completed predecessor inaccessible.
+  failTts=true;
+  const queued=await request(`/api/articles/${id}/reprocess`,'POST',{mode:'audio',voice:'other-voice'});
+  assert.equal(queued.status,200);assert.equal(queued.data.script,original.script);assert.equal(queued.data.language,original.language);
+  const history=(await request(`/api/articles/${id}/versions`)).data;
+  assert.equal(history.length,1);assert.equal(history[0].voice,'german-test');
+  const oldUrl=base+`/api/articles/${id}/audio?version=${history[0].versionId}`;
+  assert.deepEqual(Buffer.from(await (await fetch(oldUrl)).arrayBuffer()),originalAudio);
+  const range=await fetch(oldUrl,{headers:{Range:'bytes=0-99'}});
+  assert.equal(range.status,206);assert.equal((await range.arrayBuffer()).byteLength,100);
+  const head=await fetch(oldUrl,{method:'HEAD'});assert.equal(head.status,200);assert.equal(Number(head.headers.get('content-length')),original.audioBytes);
+  assert.equal((await fetch(oldUrl,{headers:{Range:'bytes=999999999-'}})).status,416);
+  assert.equal((await fetch(base+`/api/articles/${id}/audio?version=../../outside`)).status,400);
+  assert.equal((await fetch(base+`/api/articles/${id}/audio?version=00000000-0000-0000-0000-000000000000`)).status,404);
+  await until(async()=>(await request(`/api/articles/${id}`)).data.status==='failed');
+  assert.equal(llmCalls,beforeAudio.llm);assert(ttsCalls>beforeAudio.tts);
+  assert.equal((await fetch(oldUrl)).status,200);
+  failTts=false;
+  assert.equal((await request(`/api/articles/${id}/process`,'POST',{})).status,200);
+  await until(async()=>(await request(`/api/articles/${id}`)).data.status==='ready');
+  const audioOnly=(await request(`/api/articles/${id}`)).data;
+  assert.equal(audioOnly.script,original.script);assert.equal(JSON.parse(audioOnly.recipe).voice,'other-voice');assert.equal(llmCalls,beforeAudio.llm);
+  const beforeAll={llm:llmCalls,tts:ttsCalls};
+  const all=await request(`/api/articles/${id}/reprocess`,'POST',{mode:'all',voice:''});
+  assert.equal(all.status,200);assert.equal(all.data.script,'');assert.equal(all.data.language,'');
+  await until(async()=>(await request(`/api/articles/${id}`)).data.status==='ready');
+  assert(llmCalls>beforeAll.llm);assert(ttsCalls>beforeAll.tts);
+  const versions=(await request(`/api/articles/${id}/versions`)).data;
+  assert.equal(versions.length,2);assert.equal(versions[0].voice,'other-voice');
+  assert.deepEqual(Buffer.from(await (await fetch(oldUrl)).arrayBuffer()),originalAudio);
+  assert.equal((await request(`/api/articles/${id}`,'DELETE')).status,200);
+  assert.equal((await fetch(oldUrl)).status,404);
+});
+test('worker applies saved article and LLM limits without restart',async()=>{
   slowLlm=true;
   for(const [articleConcurrency,llmConcurrency,expected] of [[1,3,3],[2,1,1],[2,3,3]]){
     peakLlm=0;
@@ -200,7 +250,7 @@ test('worker applies temporary article and LLM limits without restart',async()=>
     const ids:string[]=[];
     try{
       for(const title of ['Parallel one','Parallel two']){
-        const result=await request('/api/articles','POST',{title,text:`${title}: Ein kurzer Testartikel.`});
+        const result=await request('/api/articles','POST',{title,text:`${title}: A short test article.`});
         ids.push(result.data.id);
       }
       await Promise.all(ids.map(id=>request(`/api/articles/${id}/process`,'POST',{})));
@@ -215,16 +265,21 @@ test('worker applies temporary article and LLM limits without restart',async()=>
   }
   slowLlm=false;
 });
-test('reset endpoint and worker restart restore permanent settings',async()=>{
+test('worker restart preserves settings and explicit reset restores .env',async()=>{
   const reset=await request('/api/settings','DELETE');
   assert.equal(reset.status,200);assert.deepEqual(reset.data.overriddenFields,[]);
-  assert.equal(reset.data.llmModel,'');
+  assert.equal(reset.data.llmModel,defaults.llmModel);
   const changed=await request('/api/settings','PUT',{...reset.data,llmModel:'temporary',llmConcurrency:1,ttsConcurrency:1,llmChunkChars:1500});
   assert.equal(changed.data.llmModel,'temporary');
   const exited=once(worker,'exit');worker.kill('SIGTERM');await exited;
+  const logOffset=logs.length;
   worker=spawn(process.execPath,['--import','tsx','apps/worker/index.ts'],{cwd:resolve('.'),env:{...process.env,DATA_DIR:temp,REDREAD_ENV_FILE:'',ARTICLE_CONCURRENCY:'2',LLM_CONCURRENCY:'3',TTS_CONCURRENCY:'2'},stdio:['ignore','pipe','pipe']});
+  worker.stdout?.on('data',b=>logs+=b);
   worker.stderr?.on('data',b=>logs+=b);
-  await until(async()=>(await request('/api/settings')).data.overriddenFields.length===0);
+  await until(async()=>logs.slice(logOffset).includes('redread worker ready:'));
+  const persisted=(await request('/api/settings')).data;
+  assert.equal(persisted.llmModel,'temporary');assert.equal(persisted.llmConcurrency,1);assert.equal(persisted.ttsConcurrency,1);assert.equal(persisted.llmChunkChars,1500);
+  assert.equal((await request('/api/settings','DELETE')).status,200);
   const restored=(await request('/api/settings')).data;
-  assert.equal(restored.llmModel,'');assert.equal(restored.llmConcurrency,3);assert.equal(restored.ttsConcurrency,2);assert.equal(restored.llmChunkChars,3000);
+  assert.equal(restored.llmModel,defaults.llmModel);assert.equal(restored.llmConcurrency,3);assert.equal(restored.ttsConcurrency,2);assert.equal(restored.llmChunkChars,3000);
 });

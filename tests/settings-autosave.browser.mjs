@@ -1,0 +1,52 @@
+import {chromium} from '@playwright/test';
+const base=process.env.TEST_URL||'http://127.0.0.1:3210';
+const browser=await chromium.launch({headless:true,...(process.env.CHROMIUM_PATH?{executablePath:process.env.CHROMIUM_PATH}:{})});
+try {
+  const page=await browser.newPage();
+  await page.goto(base);
+  await (async page => {
+  let saved=await (await page.request.get(`${base}/api/settings`)).json();
+  saved={...saved,feedTitle:'Autosave initial fixture'};
+  const writes=[];
+  let fail=false;
+  await page.route('**/api/settings',async route=>{
+    if(route.request().method()==='GET')return route.fulfill({json:saved});
+    const body=route.request().postDataJSON();writes.push(body);
+    await page.waitForTimeout(1100);
+    if(fail)return route.fulfill({status:500,json:{error:'Testfehler'}});
+    saved={...saved,...body,llmKey:'',ttsKey:'',hasLlmKey:!!body.llmKey||saved.hasLlmKey,hasTtsKey:!!body.ttsKey||saved.hasTtsKey};
+    await route.fulfill({json:saved});
+  });
+  const waitFor=async predicate=>{for(let i=0;i<100;i++){if(await predicate())return;await page.waitForTimeout(100);}throw new Error('Timed out');};
+  await page.reload();
+  await page.getByRole('button',{name:'Settings',exact:true}).click();
+  const title=page.getByLabel('Feed title',{exact:true});
+  await title.fill('Autosave A');
+  await waitFor(()=>writes.length===1);
+  await title.fill('Autosave B');
+  await waitFor(()=>saved.feedTitle==='Autosave B');
+  if(await title.inputValue()!=='Autosave B')throw new Error('New edit overwritten');
+  await title.fill('Autosave Navigation');
+  await page.getByRole('button',{name:/^Library/}).click();
+  await waitFor(()=>saved.feedTitle==='Autosave Navigation');
+  await page.getByRole('button',{name:'Settings',exact:true}).click();
+  const count=writes.length;
+  await page.getByLabel('LLM base URL').fill('invalid');
+  await page.waitForTimeout(1000);
+  if(writes.length!==count)throw new Error('Invalid form saved');
+  await page.getByLabel('LLM base URL').fill(saved.llmUrl);
+  fail=true;
+  await title.fill('Autosave Retry');
+  await page.getByRole('button',{name:'Try again',exact:true}).waitFor();
+  fail=false;
+  await page.getByRole('button',{name:'Try again',exact:true}).click();
+  await waitFor(()=>saved.feedTitle==='Autosave Retry');
+  await page.getByRole('button',{name:'Try again',exact:true}).waitFor({state:'hidden'});
+  await page.locator('input[type=password]').first().fill('test-key');
+  await waitFor(()=>writes.at(-1)?.llmKey==='test-key');
+  await waitFor(async()=>await page.locator('input[type=password]').first().inputValue()==='');
+  if(await page.locator('input[type=password]').first().inputValue()!=='')throw new Error('Key not cleared');
+  if(await page.locator('input[type=password]').first().getAttribute('placeholder')!=='*****')throw new Error('Key mask missing');
+  console.log('PASS: autosave, concurrent editing, navigation, validation, retry, key masking; settings writes mocked.');
+})(page);
+} finally {await browser.close();}

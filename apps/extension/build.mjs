@@ -7,7 +7,7 @@ import {createRequire} from 'node:module';
 import {execFileSync} from 'node:child_process';
 const root=fileURLToPath(new URL('.',import.meta.url));
 const require=createRequire(import.meta.url);
-const manifest={manifest_version:3,name:'redread – Artikel zum Hören',version:'0.1.0',description:'Sende den aktuellen Artikel an deinen eigenen redread-Server und höre ihn als Podcast.',permissions:['activeTab','scripting','storage'],optional_host_permissions:['http://*/*','https://*/*'],action:{default_popup:'popup.html',default_title:'Mit redread hörbar machen',default_icon:{16:'icons/16.png',32:'icons/32.png'}},icons:{16:'icons/16.png',32:'icons/32.png',48:'icons/48.png',128:'icons/128.png'}};
+const manifest={manifest_version:3,name:'redread – Articles to listen to',version:'0.1.0',description:'Send the current article to your own redread server and listen to it as a podcast.',permissions:['activeTab','scripting','storage'],optional_host_permissions:['http://*/*','https://*/*'],action:{default_popup:'popup.html',default_title:'Listen with redread',default_icon:{16:'icons/16.png',32:'icons/32.png'}},icons:{16:'icons/16.png',32:'icons/32.png',48:'icons/48.png',128:'icons/128.png'}};
 await mkdir(join(root,'artifacts'),{recursive:true});
 for(const browser of ['chrome','firefox']){
   const outdir=join(root,'dist',browser);
@@ -27,8 +27,10 @@ for(const browser of ['chrome','firefox']){
     readFile(require.resolve('@mozilla/readability/LICENSE.md'),'utf8'),
     readFile(join(modules,'@fontsource/dm-sans/LICENSE'),'utf8'),
     readFile(join(modules,'@fontsource/manrope/LICENSE'),'utf8'),
+    readFile(require.resolve('turndown/LICENSE'),'utf8'),
+    readFile(require.resolve('turndown-plugin-gfm/LICENSE'),'utf8'),
   ]);
-  await writeFile(join(outdir,'THIRD_PARTY_NOTICES.txt'),['Mozilla Readability','DM Sans','Manrope'].map((name,i)=>`${name}\n${notices[i]}`).join('\n\n'));
+  await writeFile(join(outdir,'THIRD_PARTY_NOTICES.txt'),['Mozilla Readability','DM Sans','Manrope','Turndown','Turndown GFM plugin'].map((name,i)=>`${name}\n${notices[i]}`).join('\n\n'));
   const archive=join(root,'artifacts',`redread-${browser}.zip`);
   await rm(archive,{force:true});execFileSync('zip',['-qr',archive,'.'],{cwd:outdir});
   const downloads=resolve(root,'../web/public/extensions');

@@ -1,6 +1,6 @@
 export function createLimiter(limit: number | (() => number)) {
   const getLimit = () => typeof limit === 'function' ? limit() : limit;
-  if (!Number.isInteger(getLimit()) || getLimit() < 1) throw new Error('Parallelität muss eine positive Ganzzahl sein.');
+  if (!Number.isInteger(getLimit()) || getLimit() < 1) throw new Error('Concurrency must be a positive integer.');
   let active = 0;
   const waiting: (() => void)[] = [];
   function pump() {
@@ -19,7 +19,7 @@ export function createLimiter(limit: number | (() => number)) {
 // Keep input order; after a failure, stop scheduling and drain running tasks
 // before the caller marks the article failed or allows a retry/deletion.
 export async function mapConcurrent<T, R>(items: T[], limit: number, task: (item: T, index: number) => Promise<R>): Promise<R[]> {
-  if (!Number.isInteger(limit) || limit < 1) throw new Error('Parallelität muss eine positive Ganzzahl sein.');
+  if (!Number.isInteger(limit) || limit < 1) throw new Error('Concurrency must be a positive integer.');
   const result = new Array<R>(items.length);
   let next = 0;
   let failed = false;

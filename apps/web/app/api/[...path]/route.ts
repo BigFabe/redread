@@ -4,7 +4,7 @@ import { Readable } from 'node:stream';
 import { join } from 'node:path';
 import { addArticle, listArticles, getArticle, publicSettings, settings, saveSettings, resetSettings, queueArticle, patchArticle, deleteArticle, articleDir } from '@redread/core/db';
 import { busy } from '@redread/core/types';
-import { reprocessArticle } from '@redread/core/db';
+import { reprocessArticle, listAudioVersions, getAudioVersion, versionDir } from '@redread/core/db';
 import { languageVoices } from '@redread/core/language';
 import { customVoices } from '@redread/core/voices';
 import { extractArticle } from '@redread/core/extract';
@@ -12,8 +12,9 @@ import { extensionOrigin, extensionImport } from '@redread/core/extension-access
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 const json = (data: unknown, status = 200) => Response.json(data, {status,headers:{'Cache-Control':'no-store'}});
-const httpUrl = z.string().url().refine(s => { try { const u = new URL(s); return ['http:','https:'].includes(u.protocol) && !u.username && !u.password; } catch { return false; } }, 'HTTP(S)-URL ohne Zugangsdaten erforderlich.');
+const httpUrl = z.string().url().refine(s => { try { const u = new URL(s); return ['http:','https:'].includes(u.protocol) && !u.username && !u.password; } catch { return false; } }, 'An HTTP(S) URL without credentials is required.');
 const settingsSchema = z.object({
+  theme: z.enum(['light','dark','auto']).optional(),
   ttsProvider: z.enum(['openai','fish']).default('openai'),
   llmUrl: httpUrl, ttsUrl: httpUrl, llmModel: z.string().trim().max(200), ttsModel: z.string().trim().max(200),
   llmKey: z.string().max(2000).optional(), ttsKey: z.string().max(2000).optional(),
@@ -37,8 +38,13 @@ async function handleRequest(req: Request, context: Context) {
       const host = req.headers.get('x-forwarded-host') || req.headers.get('host');
       let sameOrigin=!origin;
       if(origin){try{const url=new URL(origin);sameOrigin=['http:','https:'].includes(url.protocol)&&url.host===host;}catch{sameOrigin=false;}}
-      if (!extensionImport(req,path) && (!sameOrigin || req.headers.get('sec-fetch-site') === 'cross-site')) return json({error:'Fremde Herkunft nicht erlaubt.'},403);
-      if (!req.headers.get('content-type')?.includes('application/json')) return json({error:'JSON erforderlich.'},415);
+      if (!extensionImport(req,path) && (!sameOrigin || req.headers.get('sec-fetch-site') === 'cross-site')) return json({error:'Cross-origin requests are not allowed.'},403);
+      if (resource === 'import-pdf' && path.length === 1 && req.method === 'POST') {
+        if (req.headers.get('content-type')?.split(';')[0].trim() !== 'application/pdf') return json({error:'A PDF file is required.'},415);
+        const {extractPdfText} = await import('../../pdf-import');
+        return json({text:await extractPdfText(req)});
+      }
+      if (!req.headers.get('content-type')?.includes('application/json')) return json({error:'JSON is required.'},415);
     }
     if (resource === 'health' && req.method === 'GET') {
       const s=settings();return json({app:'redread',version:'0.1',ready:!!s.llmModel&&!!s.ttsModel});
@@ -54,13 +60,13 @@ async function handleRequest(req: Request, context: Context) {
       saveSettings({...current,...values,llmKey:clearLlmKey ? '' : input.llmKey || current.llmKey, ttsKey:clearTtsKey ? '' : input.ttsKey || current.ttsKey});
       return json(publicSettings());
     }
-    if (resource !== 'articles') return json({error:'Nicht gefunden.'},404);
-    if (!id && req.method === 'GET') return json(listArticles().map(({original,script,recipe,...a}) => ({...a,excerpt:original.slice(0,220),wordCount:original.split(/\s+/).length,hasScript:!!script})));
+    if (resource !== 'articles') return json({error:'Not found.'},404);
+    if (!id && req.method === 'GET') return json(listArticles().map(({original,script,recipe,...a}) => ({...a,excerpt:script.trim().slice(0,220),wordCount:original.split(/\s+/).length,hasScript:!!script})));
     if (!id && req.method === 'POST') {
       const input = z.object({url:z.union([httpUrl,z.literal('')]).optional(), title:z.string().trim().max(300).optional(),text:z.string().trim().max(200000).optional(),process:z.boolean().optional(),voice:z.string().trim().max(200).optional()}).parse(await req.json());
-      if (!input.text && !input.url) return json({error:'Bitte eine URL oder einen Artikeltext einfügen.'},400);
+      if (!input.text && !input.url) return json({error:'Please provide a URL or paste article text.'},400);
       const data = input.text
-        ? {title:input.title || input.text.split('\n')[0].slice(0,100), original:input.text, url:input.url || '',source:input.url ? new URL(input.url).hostname : 'Eigener Text'}
+        ? {title:input.title || input.text.split('\n')[0].slice(0,100), original:input.text, url:input.url || '',source:input.url ? new URL(input.url).hostname : 'Custom text'}
         : await extractArticle(input.url!);
       const a = addArticle({...data,title:input.title || data.title});
       if(input.voice)patchArticle(a.id,{voice:input.voice});
@@ -68,10 +74,12 @@ async function handleRequest(req: Request, context: Context) {
       return json(getArticle(a.id),201);
     }
     const article = getArticle(id);
-    if (!article) return json({error:'Artikel nicht gefunden.'},404);
+    if (!article) return json({error:'Article not found.'},404);
+    if (action === 'versions' && req.method === 'GET') return json(listAudioVersions(id));
     if (action === 'audio' && (req.method === 'GET' || req.method === 'HEAD')) {
-      if (article.status !== 'ready') return json({error:'Audio ist noch nicht fertig.'},404);
-      const file = join(articleDir(id),'episode.mp3'); const size = statSync(file).size;
+      const versionId = new URL(req.url).searchParams.get('version');
+      if (versionId!==null ? !getAudioVersion(id,versionId) : article.status !== 'ready') return json({error:'Audio is not available.'},404);
+      const file = join(versionId!==null?versionDir(id,versionId):articleDir(id),'episode.mp3'); const size = statSync(file).size;
       const headers: Record<string,string> = {'Content-Type':'audio/mpeg','Accept-Ranges':'bytes','Cache-Control':'private, no-cache','Content-Disposition':`inline; filename="redread-${id}.mp3"`};
       let start=0,end=size-1; const range=req.headers.get('range');
       if (range) {
@@ -87,20 +95,20 @@ async function handleRequest(req: Request, context: Context) {
     }
     if ((action === 'process'||action === 'reprocess') && req.method === 'POST') {
       const body=await req.text();
-      const {voice}=z.object({voice:z.string().trim().max(200).optional()}).parse(body?JSON.parse(body):{});
-      return json(action==='process'?queueArticle(id,voice):reprocessArticle(id,voice));
+      const {voice,mode}=z.object({voice:z.string().trim().max(200).optional(),mode:z.enum(['audio','all']).default('all')}).parse(body?JSON.parse(body):{});
+      return json(action==='process'?queueArticle(id,voice):reprocessArticle(id,voice,mode));
     }
     if (!action && req.method === 'GET') return json(article);
     if (!action && req.method === 'PATCH') {
-      if (busy(article.status) || article.status === 'ready') return json({error:'Nur Entwürfe und fehlgeschlagene Artikel können bearbeitet werden.'},409);
-      const patch=z.object({script:z.string().trim().min(1).max(250000)}).parse(await req.json());
+      const patch=z.object({title:z.string().trim().min(1).max(500).optional(),script:z.string().trim().min(1).max(250000).optional()}).refine(value=>value.title!==undefined||value.script!==undefined,{message:'Provide a title or listening version.'}).parse(await req.json());
+      if (patch.script!==undefined && (busy(article.status) || article.status === 'ready')) return json({error:'Only drafts and failed articles can be edited.'},409);
       return json(patchArticle(id,patch));
     }
     if (!action && req.method === 'DELETE') { deleteArticle(id); return json({ok:true}); }
-    return json({error:'Nicht gefunden.'},404);
+    return json({error:'Not found.'},404);
   } catch(error) {
     if (error instanceof z.ZodError) return json({error:error.issues.map(i=>`${i.path.join('.')}: ${i.message}`).join(' · ')},400);
-    return json({error: error instanceof Error ? error.message : 'Die Anfrage ist fehlgeschlagen.'},400);
+    return json({error: error instanceof Error ? error.message : 'The request failed.'},400);
   }
 }
 async function handle(req:Request,context:Context) {
@@ -114,7 +122,7 @@ async function handle(req:Request,context:Context) {
 export async function OPTIONS(req:Request,context:Context) {
   const {path}=await context.params;const origin=extensionOrigin(req);
   const headers=(req.headers.get('access-control-request-headers')||'').toLowerCase().split(',').map(s=>s.trim()).filter(Boolean);
-  if(!origin||path.length!==1||path[0]!=='articles'||req.headers.get('access-control-request-method')!=='POST'||headers.some(h=>!['content-type','x-redread-extension'].includes(h)))return json({error:'Fremde Herkunft nicht erlaubt.'},403);
+  if(!origin||path.length!==1||path[0]!=='articles'||req.headers.get('access-control-request-method')!=='POST'||headers.some(h=>!['content-type','x-redread-extension'].includes(h)))return json({error:'Cross-origin requests are not allowed.'},403);
   return new Response(null,{status:204,headers:{'Access-Control-Allow-Origin':origin,'Access-Control-Allow-Methods':'POST','Access-Control-Allow-Headers':'Content-Type, X-Redread-Extension','Vary':'Origin'}});
 }
 export {handle as GET,handle as HEAD,handle as POST,handle as PUT,handle as PATCH,handle as DELETE};

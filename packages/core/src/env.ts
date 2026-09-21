@@ -14,7 +14,7 @@ if (file) loadEnvFile(file);
 
 function integerSetting(name: string, fallback: number, min: number, max: number) {
   const value = Number(process.env[name] ?? fallback);
-  if (!Number.isInteger(value) || value < min || value > max) throw new Error(`${name} muss eine Ganzzahl zwischen ${min} und ${max} sein.`);
+  if (!Number.isInteger(value) || value < min || value > max) throw new Error(`${name} must be an integer between ${min} and ${max}.`);
   return value;
 }
 const numericNames = {
@@ -25,6 +25,7 @@ const numericNames = {
 } as const;
 
 const names = {
+  theme: 'UI_THEME',
   llmUrl: 'LLM_BASE_URL', llmModel: 'LLM_MODEL', llmKey: 'LLM_API_KEY',
   ttsProvider: 'TTS_PROVIDER', ttsUrl: 'TTS_URL', ttsModel: 'TTS_MODEL',
   ttsKey: 'TTS_API_KEY', voice: 'TTS_VOICE',
@@ -38,7 +39,7 @@ export function environmentSettings(): Partial<Settings> {
   }
   if (process.env.TTS_LANGUAGE_VOICES !== undefined) {
     try { result.languageVoices=languageVoices(JSON.parse(process.env.TTS_LANGUAGE_VOICES)); }
-    catch { throw new Error('TTS_LANGUAGE_VOICES muss eine gültige JSON-Zuordnung sein, z. B. {"de":"stimme-de","en":"stimme-en"}.'); }
+    catch { throw new Error('TTS_LANGUAGE_VOICES must be a valid JSON mapping, for example {"de":"voice-de","en":"voice-en"}.'); }
   }
   for (const [field, variable] of Object.entries(names)) {
     if (process.env[variable] !== undefined) result[field] = process.env[variable]!;
@@ -46,6 +47,7 @@ export function environmentSettings(): Partial<Settings> {
   for (const [field, [name, fallback, min, max]] of Object.entries(numericNames)) {
     if (process.env[name] !== undefined) result[field] = integerSetting(name, fallback, min, max);
   }
-  if (result.ttsProvider && !['openai','fish'].includes(String(result.ttsProvider))) throw new Error('TTS_PROVIDER muss openai oder fish sein.');
+  if (result.ttsProvider && !['openai','fish'].includes(String(result.ttsProvider))) throw new Error('TTS_PROVIDER must be openai or fish.');
+  if (result.theme !== undefined && !['light','dark','auto'].includes(String(result.theme))) throw new Error('UI_THEME must be light, dark, or auto.');
   return result as Partial<Settings>;
 }

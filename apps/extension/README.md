@@ -1,60 +1,60 @@
-# redread Browsererweiterung
+# redread browser extension
 
-Gemeinsame TypeScript-Codebasis mit getrennten Manifest-V3-Builds für **Chrome/Chromium/Brave ab 120** und **Firefox ab 142**. Keine Browser- oder Modell-API-Keys erforderlich.
+Shared TypeScript codebase with separate Manifest V3 builds for **Chrome/Chromium/Brave 120+** and **Firefox 142+**. No browser or model API keys are required.
 
-## Installieren
+## Installation
 
-Pakete aus dem aktuellen GitHub-Release:
+Packages from the latest GitHub release:
 
-- [Chrome herunterladen](https://github.com/BigFabe/redread/releases/latest/download/redread-chrome.zip)
-- [Firefox herunterladen](https://github.com/BigFabe/redread/releases/latest/download/redread-firefox.zip)
+- [Download for Chrome](https://github.com/BigFabe/redread/releases/latest/download/redread-chrome.zip)
+- [Download for Firefox](https://github.com/BigFabe/redread/releases/latest/download/redread-firefox.zip)
 
-Nach lokalem Build außerdem unter `/extensions/redread-chrome.zip` bzw. `/extensions/redread-firefox.zip` auf dem eigenen redread-Server verfügbar.
+After a local build, the packages are also available from your redread server at `/extensions/redread-chrome.zip` and `/extensions/redread-firefox.zip`.
 
 ### Chrome / Brave
 
-1. ZIP entpacken (oder lokal `apps/extension/dist/chrome` verwenden).
-2. `chrome://extensions` öffnen (Brave: `brave://extensions`).
-3. Entwicklermodus aktivieren → **Entpackte Erweiterung laden** → den Ordner mit `manifest.json` auswählen.
-4. redread in der Toolbar anheften.
+1. Extract the ZIP file, or use `apps/extension/dist/chrome` locally.
+2. Open `chrome://extensions` (Brave: `brave://extensions`).
+3. Enable Developer mode → **Load unpacked** → select the directory containing `manifest.json`.
+4. Pin redread to the toolbar.
 
 ### Firefox
 
-1. ZIP entpacken (oder lokal `apps/extension/dist/firefox` verwenden).
-2. `about:debugging#/runtime/this-firefox` öffnen.
-3. **Temporäres Add-on laden** → `manifest.json` im Firefox-Ordner auswählen.
+1. Extract the ZIP file, or use `apps/extension/dist/firefox` locally.
+2. Open `about:debugging#/runtime/this-firefox`.
+3. **Load Temporary Add-on** → select `manifest.json` in the Firefox directory.
 
-**Wichtig:** Temporäre Firefox-Add-ons werden beim Browserneustart entfernt. Für eine dauerhafte Installation in regulärem Firefox muss der Build von Mozilla signiert werden (eine nicht öffentlich gelistete AMO-Signierung genügt). Dieser Prototyp ist noch nicht signiert. Keine Sicherheitseinstellungen oder Signaturprüfung deaktivieren.
+**Important:** Temporary Firefox add-ons are removed when the browser restarts. For permanent installation in standard Firefox, Mozilla must sign the build; an unlisted AMO signing is sufficient. This prototype is not signed yet. Do not disable security settings or signature verification.
 
-## Einrichten und verwenden
+## Setup and usage
 
-1. Erweiterung öffnen: Im Popup erscheint direkt das Feld für die Serveradresse.
-2. Serveradresse eintragen: `http://dein-host:3210`.
-3. **Speichern & verbinden**, den Zugriff auf den Server bestätigen. Tailscale muss verbunden sein. Nach erfolgreicher Prüfung erscheint die Artikelansicht im selben Popup.
-4. Artikel öffnen → redread-Symbol → optional **Stimme** wählen → **Artikel hörbar machen**. Die Liste wird aus „Eigene Stimmen“ der Webapp-Einstellungen geladen. Ohne Auswahl gelten die Sprachzuordnung und Standardstimme.
-5. Die Erweiterung überträgt Titel, Quell-URL und den mit Mozilla Readability extrahierten Text der bereits geöffneten Seite. Der Server startet automatisch die LLM-/TTS-Verarbeitung.
-6. **Artikel in redread öffnen** führt direkt zur Artikelansicht. Fehlen Modelle, wird stattdessen ein Entwurf gespeichert und dies angezeigt.
+1. Open the extension. The server-address field appears directly in the popup.
+2. Enter the server address: `http://your-host:3210`.
+3. Select **Save & connect** and confirm access to the server. Tailscale must be connected. After a successful check, the article view appears in the same popup.
+4. Open an article → select the redread icon → optionally choose a **Voice** → select **Make article listenable**. The list is loaded from “Custom voices” in the web app settings. Without a selection, the language mapping and default voice apply.
+5. The extension sends the title, source URL, and text extracted from the open page with Mozilla Readability. The server starts LLM/TTS processing automatically.
+6. **Open article in redread** goes directly to the article view. If models are missing, a draft is saved instead and the popup explains this.
 
-Das Zahnrad öffnet die Einstellungen direkt im Popup, ohne zusätzliche Seite. **Ausloggen** entfernt die Serveradresse, lokale Übertragungsstatus und Serverberechtigungen und zeigt wieder das leere Adressfeld. Bereits gespeicherte Artikel auf dem Server bleiben erhalten; laufende serverseitige Audioverarbeitung wird nicht abgebrochen.
+The gear opens Settings directly in the popup without an additional page. **Log out** removes the server address, local transfer statuses, and server permissions, then returns to the empty address field. Articles already stored on the server remain intact, and active server-side audio processing is not cancelled.
 
-Das Popup darf nach dem Senden geschlossen werden; die Übertragung läuft im Hintergrund und die eigentliche Audioverarbeitung auf dem Server. Der letzte Übertragungsstatus bleibt pro Tab erhalten. Während der Übertragung werden doppelte Klicks zusammengefasst. Ein bereits erfolgreich gespeicherter Artikel wird im selben Tab und unter derselben URL nicht erneut gesendet. Nach einem unklaren Netzwerkfehler vor erneutem Senden die Bibliothek prüfen: Der Server könnte die Anfrage bereits erhalten haben.
+You can close the popup after sending. The transfer continues in the background, while audio processing happens on the server. The latest transfer status is retained per tab. Duplicate clicks during a transfer are coalesced. An article already saved successfully is not sent again from the same tab at the same URL. After an ambiguous network error, check the library before retrying because the server may already have received the request.
 
-## Berechtigungen und Datenschutz
+## Permissions and privacy
 
-- `activeTab`: Zugriff auf die aktuelle Seite erst nach dem Klick auf die Erweiterung.
-- `scripting`: den Artikeltext in diesem Tab auslesen, ohne die Originalseite zu verändern.
-- `storage`: Serveradresse und letzter Übertragungsstatus lokal speichern, kein Browser-Sync.
-- Optionale HTTP(S)-Hostberechtigung: wird beim Speichern nur für den angegebenen Server angefordert. Die Browserberechtigung kann technisch nicht auf einen einzelnen Port begrenzt werden.
-- Keine automatisch injizierten Content-Scripts, kein Zugriff auf alle besuchten Seiten, keine Analytics, keine Remote-Scripts.
-- Übertragen werden Artikeltext, Titel und URL (einschließlich möglicher Query-Parameter). Angemeldete Inhalte können enthalten sein. Formulare und Eingabefelder werden vor der Extraktion entfernt. Cookies und Modell-Keys werden nicht mitgesendet.
-- Der konfigurierte Server kann den Text an seine LLM-/TTS-Anbieter weiterleiten.
-- Eingeschränkte Browserseiten, Add-on-Stores, PDFs und manche eingebetteten Inhalte lassen sich nicht auslesen. In diesem Fall Text direkt in der Webapp einfügen.
+- `activeTab`: access to the current page only after the extension is selected.
+- `scripting`: reads the article text from that tab without modifying the original page.
+- `storage`: stores the server address and latest transfer status locally, without browser sync.
+- Optional HTTP(S) host permission: requested only for the specified server when saving. Browser permissions cannot technically be limited to a single port.
+- No automatically injected content scripts, access to all visited pages, analytics, or remote scripts.
+- The extension sends article text, title, and URL, including possible query parameters. This may include authenticated content. Forms and input fields are removed before extraction. Cookies and model keys are not sent.
+- The configured server may forward the text to its LLM/TTS providers.
+- Restricted browser pages, add-on stores, PDFs, and some embedded content cannot be read. Paste the text directly into the web app in these cases.
 
-Die Server-API erlaubt Erweiterungs-Origin-POSTs ausschließlich für `/api/articles` mit dem Marker `X-Redread-Extension: 1`. Die Same-Origin-Prüfung anderer schreibender Endpunkte bleibt bestehen. Der Server hat weiterhin keine Authentifizierung und gehört ausschließlich in ein vertrauenswürdiges Netzwerk.
+The server API permits extension-origin POST requests only to `/api/articles` and only with the `X-Redread-Extension: 1` marker. Same-origin checks remain in place for other write endpoints. The server still has no authentication and belongs only in a trusted network.
 
-## Entwickeln
+## Development
 
-Im Monorepo-Root (Node.js 24+, npm und `zip`):
+From the monorepo root (Node.js 24+, npm, and `zip`):
 
 ```sh
 npm ci
@@ -63,17 +63,17 @@ npm run typecheck
 npm run lint:firefox -w @redread/extension
 ```
 
-Erzeugt:
+Produces:
 
 ```text
-apps/extension/dist/chrome/           entpackt installierbar
-apps/extension/dist/firefox/          entpackt installierbar
+apps/extension/dist/chrome/           installable unpacked
+apps/extension/dist/firefox/          installable unpacked
 apps/extension/artifacts/redread-chrome.zip
 apps/extension/artifacts/redread-firefox.zip
-apps/web/public/extensions/           Downloads über die Webapp
+apps/web/public/extensions/           downloads served by the web app
 ```
 
-Nach Änderungen neu bauen und auf der Erweiterungsseite des Browsers **Neu laden** wählen. Die Erweiterung verwendet nur mitgelieferte Skripte und Schriften. `.env` und andere Serverdateien gelangen nicht in die Pakete. Für Downloads im Produktionsserver zuerst Erweiterung und anschließend Webapp bauen.
+After making changes, rebuild and select **Reload** on the browser's extension page. The extension uses only bundled scripts and fonts. `.env` and other server files are not included in the packages. To serve downloads from the production server, build the extension first and the web app second.
 
 ## Tests
 
@@ -85,8 +85,8 @@ npx playwright install firefox
 npm run test:extension
 ```
 
-`test:extension` verwendet ein isoliertes Datenverzeichnis und echte Chromium-/Firefox-Erweiterungs-APIs. Kein Worker und keine externen Modellaufrufe. Firefox wird über `web-ext` temporär installiert, Chromium über einen separaten Profilordner. Bei Bedarf `CHROMIUM_PATH` oder `FIREFOX_PATH` setzen.
+`test:extension` uses an isolated data directory and real Chromium/Firefox extension APIs. It runs without a worker or external model calls. Firefox is installed temporarily through `web-ext`, while Chromium uses a separate profile directory. Set `CHROMIUM_PATH` or `FIREFOX_PATH` if needed.
 
-Die Testkopien erhalten ausschließlich für lokale Testseiten automatische Hostberechtigungen, um Toolbar-Klicks/Browser-Permission-Dialoge im Headless-Modus zu ersetzen. **Die Release-Pakete enthalten diese zusätzlichen Berechtigungen und Testskripte nicht.** Geprüft werden gerenderter DOM-Inhalt, Extraktion, Hintergrundübertragung zur echten redread-API, Queue-Start, Doppelklickschutz und Statusspeicherung. Popup-UI einschließlich eingebetteter Einstellungen wird zusätzlich in Chromium geprüft. Der eigenständige Test `node tests/extension-popup.mjs` prüft außerdem Ersteinrichtung, fehlgeschlagene Verbindung, Ausloggen und erneutes Öffnen ohne Webapp-Build.
+Test copies receive automatic host permissions only for local test pages, replacing toolbar clicks and browser permission dialogs in headless mode. **Release packages do not contain these extra permissions or test scripts.** Tests cover rendered DOM content, extraction, background transfer to the real redread API, queue startup, duplicate-click protection, and status persistence. Chromium additionally checks the popup UI, including embedded settings. The standalone `node tests/extension-popup.mjs` test also covers first-time setup, connection failure, logout, and reopening without a web app build.
 
-Firefox-Lint: keine Fehler; zwei `innerHTML`-Warnungen aus dem eingebundenen Mozilla-Readability-Code. Readability arbeitet auf einer abgetrennten Dokumentkopie; die Erweiterung sendet nur Text und setzt keinen fremden HTML-Inhalt in ihre Oberfläche ein.
+Firefox lint reports no errors and two `innerHTML` warnings from the bundled Mozilla Readability code. Readability operates on a detached document copy; the extension sends text only and never inserts foreign HTML into its UI.

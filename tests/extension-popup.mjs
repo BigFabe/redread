@@ -10,11 +10,11 @@ const temp=await mkdtemp(join(tmpdir(),'redread-popup-'));
 let healthy=true;
 const server=createServer((req,res)=>{
   if(req.url==='/api/voices'){
-    res.setHeader('Content-Type','application/json');res.end(JSON.stringify([{name:'Erzähler',voice:'custom-reference'}]));
+    res.setHeader('Content-Type','application/json');res.end(JSON.stringify([{name:'Narrator',voice:'custom-reference'}]));
   }else if(req.url==='/api/health'){
     res.setHeader('Content-Type','application/json');
     res.end(JSON.stringify({app:healthy?'redread':'not-redread',ready:true}));
-  }else{res.end('<html><title>Testartikel</title><body>Artikel</body></html>');}
+  }else{res.end('<html><title>Test article</title><body>Article</body></html>');}
 });
 server.listen(0,'127.0.0.1');await once(server,'listening');
 const base=`http://127.0.0.1:${server.address().port}`;
@@ -34,35 +34,35 @@ try{
   const created=context.waitForEvent('page');
   await worker.evaluate(()=>chrome.tabs.create({url:chrome.runtime.getURL('popup.html'),active:false}));
   const popup=await created;await popup.waitForLoadState();
-  const input=popup.getByLabel('Adresse deiner redread-Webapp');
+  const input=popup.getByLabel('Address of your redread web app');
   await expect(input).toBeVisible();await expect(input).toHaveValue('');
   await expect(popup.locator('#article-view')).toBeHidden();
-  await expect(popup.getByRole('button',{name:'Einstellungen',exact:true})).toBeHidden();
+  await expect(popup.getByRole('button',{name:'Settings',exact:true})).toBeHidden();
   await popup.screenshot({path:'/tmp/redread-popup-initial.png'});
   healthy=false;
-  await input.fill(base);await popup.getByRole('button',{name:'Speichern & verbinden'}).click();
-  await expect(popup.locator('#connection-status')).toContainText('kein redread-Server');
+  await input.fill(base);await popup.getByRole('button',{name:'Save & connect'}).click();
+  await expect(popup.locator('#connection-status')).toContainText('No redread server');
   assert.equal(await worker.evaluate(async()=>(await chrome.storage.local.get('serverUrl')).serverUrl),undefined);
   healthy=true;
-  await popup.getByRole('button',{name:'Speichern & verbinden'}).click();
+  await popup.getByRole('button',{name:'Save & connect'}).click();
   await expect(popup.locator('#article-view')).toBeVisible();
   await expect(input).toBeHidden();
-  await expect(popup.getByLabel('Stimme',{exact:true})).toBeVisible();
-  await popup.getByLabel('Stimme',{exact:true}).selectOption('custom-reference');
-  await expect(popup.getByLabel('Stimme',{exact:true})).toHaveValue('custom-reference');
+  await expect(popup.getByLabel('Voice',{exact:true})).toBeVisible();
+  await popup.getByLabel('Voice',{exact:true}).selectOption('custom-reference');
+  await expect(popup.getByLabel('Voice',{exact:true})).toHaveValue('custom-reference');
   const pageCount=context.pages().length;
-  await popup.getByRole('button',{name:'Einstellungen',exact:true}).click();
+  await popup.getByRole('button',{name:'Settings',exact:true}).click();
   await expect(input).toHaveValue(base);
   assert.equal(context.pages().length,pageCount,'Settings must not open another tab');
-  await popup.getByRole('button',{name:'Zurück zum Artikel'}).click();
+  await popup.getByRole('button',{name:'Back to article'}).click();
   await expect(popup.locator('#article-view')).toBeVisible();
-  await popup.getByRole('button',{name:'Einstellungen',exact:true}).click();
+  await popup.getByRole('button',{name:'Settings',exact:true}).click();
   await popup.screenshot({path:'/tmp/redread-popup-settings.png'});
   await worker.evaluate(()=>chrome.storage.local.set({'submission:123':{state:'saved'}}));
   // Required test grants cannot be revoked. Assert the real popup requests
   // revocation; native optional permissions are used in the release manifest.
   await popup.evaluate(()=>{chrome.permissions.remove=async permissions=>{window.revokedOrigins=permissions.origins;return true;};});
-  await popup.getByRole('button',{name:'Ausloggen',exact:true}).click();
+  await popup.getByRole('button',{name:'Log out',exact:true}).click();
   await expect(input).toHaveValue('');
   assert.deepEqual(await worker.evaluate(()=>chrome.storage.local.get(null)),{});
   assert.deepEqual(await popup.evaluate(()=>window.revokedOrigins),['http://127.0.0.1/*']);

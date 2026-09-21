@@ -4,8 +4,8 @@ export type Submission = {url:string; state:'sending'|'saved'|'error'; title:str
 export type Reply<T> = {ok:true; data:T} | {ok:false; error:string};
 export function normalizeServerUrl(value:string) {
   let url:URL;
-  try {url=new URL(value.trim());} catch {throw new Error('Bitte eine vollständige Serveradresse mit http:// oder https:// eingeben.');}
-  if(!['http:','https:'].includes(url.protocol)||url.username||url.password||url.search||url.hash||url.pathname!=='/') throw new Error('Verwende die Serveradresse ohne Pfad, Zugangsdaten, Query oder Fragment.');
+  try {url=new URL(value.trim());} catch {throw new Error('Please enter a complete server address starting with http:// or https://.');}
+  if(!['http:','https:'].includes(url.protocol)||url.username||url.password||url.search||url.hash||url.pathname!=='/') throw new Error('Use the server address without a path, credentials, query, or fragment.');
   return url.origin;
 }
 export function hostPermission(serverUrl:string) {
@@ -15,12 +15,12 @@ export function hostPermission(serverUrl:string) {
 }
 export async function serverUrl() {
   const data=await ext.storage.local.get('serverUrl');
-  if(typeof data.serverUrl!=='string'||!data.serverUrl) throw new Error('Bitte zuerst deinen redread-Server verbinden.');
+  if(typeof data.serverUrl!=='string'||!data.serverUrl) throw new Error('Please connect your redread server first.');
   return normalizeServerUrl(data.serverUrl);
 }
 export async function message<T>(payload:object):Promise<T> {
   const reply:Reply<T>=await ext.runtime.sendMessage(payload);
-  if(!reply?.ok)throw new Error(reply?.error || 'Die Erweiterung antwortet nicht. Bitte erneut öffnen.');
+  if(!reply?.ok)throw new Error(reply?.error || 'The extension is not responding. Please open it again.');
   return reply.data;
 }
 export const submissionKey=(tabId:number)=>`submission:${tabId}`;

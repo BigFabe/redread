@@ -14,7 +14,7 @@ const llmSlot = createLimiter(() => settings().llmConcurrency);
 const ttsSlot = createLimiter(() => settings().ttsConcurrency);
 
 export function splitText(text: string, limit = 3000, targetParts = 1): string[] {
-  if (!Number.isInteger(targetParts) || targetParts < 1) throw new Error('Ungültige Zielzahl für Textabschnitte.');
+  if (!Number.isInteger(targetParts) || targetParts < 1) throw new Error('Invalid target number of text sections.');
   const parts: string[] = [];
   let remaining = text.trim();
   while (remaining.length > limit) {
@@ -26,7 +26,7 @@ export function splitText(text: string, limit = 3000, targetParts = 1): string[]
     remaining = remaining.slice(cut + 1).trim();
   }
   if (remaining) parts.push(remaining);
-  const segmenter = new Intl.Segmenter('de', {granularity:'sentence'});
+  const segmenter = new Intl.Segmenter('en', {granularity:'sentence'});
   while (parts.length < targetParts) {
     const candidates = parts.map((part,index) => ({part,index})).sort((a,b) => b.part.length-a.part.length);
     let divided = false;
@@ -45,7 +45,7 @@ export function splitText(text: string, limit = 3000, targetParts = 1): string[]
   return parts;
 }
 export function splitSpeech(text: string, concurrency: number): string[] {
-  if (!Number.isInteger(concurrency) || concurrency < 1) throw new Error('Ungültige TTS-Parallelität.');
+  if (!Number.isInteger(concurrency) || concurrency < 1) throw new Error('Invalid TTS concurrency.');
   // Preserve the provider's maximum chunk size, then supply enough work even
   // when the whole script is under 3000 characters.
   return splitText(text, 3000, concurrency);
@@ -58,7 +58,7 @@ async function provider(url: string, path: string, key: string, body: object, he
   });
   if (!response.ok) {
     await response.body?.cancel();
-    throw new Error(`Modell-Endpunkt ${path || 'TTS'}: HTTP ${response.status}. Prüfe Modell, API-Key und Basis-URL in den Einstellungen.`);
+    throw new Error(`Model endpoint ${path || 'TTS'}: HTTP ${response.status}. Check the model, API key, and base URL in Settings.`);
   }
   return response;
 }
@@ -69,19 +69,19 @@ export async function prepareText(s: Settings, input: string) {
     const choice = json.choices?.[0];
     const error = json.error || choice?.error;
     if (error || choice?.finish_reason === 'error') {
-      const code = typeof error?.code === 'number' ? ` (Code ${error.code})` : '';
-      throw new Error(`Der LLM-Anbieter meldet einen Fehler${code}, obwohl die HTTP-Anfrage erfolgreich war. Bitte erneut versuchen.`);
+      const code = typeof error?.code === 'number' ? ` (code ${error.code})` : '';
+      throw new Error(`The LLM provider reported an error${code} even though the HTTP request succeeded. Please try again.`);
     }
-    if (choice?.finish_reason === 'length') throw new Error('Das LLM hat das Ausgabelimit erreicht. Bei Reasoning-Modellen kann das Limit schon vor der eigentlichen Textausgabe verbraucht sein. Bitte ein höheres Ausgabelimit oder ein anderes Modell verwenden.');
-    if (choice?.message?.refusal || choice?.finish_reason === 'content_filter') throw new Error('Das LLM hat die Verarbeitung des Artikels abgelehnt (Inhaltsfilter).');
+    if (choice?.finish_reason === 'length') throw new Error('The LLM reached its output limit. Reasoning models may use up this limit before producing the actual text. Use a higher output limit or a different model.');
+    if (choice?.message?.refusal || choice?.finish_reason === 'content_filter') throw new Error('The LLM refused to process the article (content filter).');
     const text = choice?.message?.content;
     if (typeof text === 'string' && text.trim()) return text.trim();
     if (attempt === 0) { await new Promise(resolve => setTimeout(resolve, 750)); continue; }
     const reasoning = Number(json.usage?.completion_tokens_details?.reasoning_tokens);
-    const detail = Number.isFinite(reasoning) && reasoning > 0 ? ` Es wurden ${reasoning} Reasoning-Tokens, aber keine Hörfassung geliefert.` : '';
-    throw new Error(`Das LLM hat auch beim zweiten Versuch keinen Text zurückgegeben.${detail} Bitte erneut versuchen oder das Modell wechseln.`);
+    const detail = Number.isFinite(reasoning) && reasoning > 0 ? ` It used ${reasoning} reasoning tokens but returned no listening version.` : '';
+    throw new Error(`The LLM returned no text on the second attempt either.${detail} Please try again or switch models.`);
   }
-  throw new Error('Keine LLM-Ausgabe.');
+  throw new Error('No LLM output.');
 }
 export function speech(s: Settings, text: string) {
   if (s.ttsProvider === 'fish') {
@@ -99,7 +99,7 @@ export async function processArticle(article: Article) {
   const dir = articleDir(article.id);
   let language=article.language;
   if (!language) {
-    patchArticle(article.id,{progress:'Sprache erkennen'});
+    patchArticle(article.id,{progress:'Detecting language'});
     language=await detectLanguage(s,article.original);
     patchArticle(article.id,{language});
   }
@@ -111,7 +111,7 @@ export async function processArticle(article: Article) {
     const parts = splitText(article.original, s.llmChunkChars, s.llmConcurrency);
     const pending = new Map<string, Promise<string>>();
     let completed = 0;
-    patchArticle(article.id, {progress: `Hörfassung · 0 von ${parts.length} Abschnitten fertig`});
+    patchArticle(article.id, {progress: `Listening version · 0 of ${parts.length} sections complete`});
     const result = await mapConcurrent(parts, 32, async part => {
       const hash = createHash('sha256').update(JSON.stringify([s.llmUrl,s.llmModel,s.prompt,part])).digest('hex');
       let job = pending.get(hash);
@@ -126,7 +126,7 @@ export async function processArticle(article: Article) {
         pending.set(hash, job);
       }
       const text = await job;
-      patchArticle(article.id, {progress: `Hörfassung · ${++completed} von ${parts.length} Abschnitten fertig`});
+      patchArticle(article.id, {progress: `Listening version · ${++completed} of ${parts.length} sections complete`});
       return text;
     });
     script = result.join('\n\n');
@@ -136,7 +136,7 @@ export async function processArticle(article: Article) {
   const parts = splitSpeech(script, settings().ttsConcurrency);
   const pendingAudio = new Map<string, Promise<string>>();
   let completedAudio = 0;
-  patchArticle(article.id, {progress: `Audio · 0 von ${parts.length} Abschnitten fertig`});
+  patchArticle(article.id, {progress: `Audio · 0 of ${parts.length} sections complete`});
   const files = await mapConcurrent(parts, 32, async part => {
     const hash = createHash('sha256').update(JSON.stringify([s.ttsProvider,s.ttsUrl,s.ttsModel,s.voice,part])).digest('hex');
     let job = pendingAudio.get(hash);
@@ -147,7 +147,7 @@ export async function processArticle(article: Article) {
           await ttsSlot(async () => {
             const response = await speech(s, part);
             const bytes = Buffer.from(await response.arrayBuffer());
-            if (!bytes.length) throw new Error('Das TTS-Modell hat kein Audio zurückgegeben.');
+            if (!bytes.length) throw new Error('The TTS model returned no audio.');
             writeFileSync(file+'.tmp', bytes, {mode: 0o600}); renameSync(file+'.tmp', file);
           });
         }
@@ -156,13 +156,13 @@ export async function processArticle(article: Article) {
       pendingAudio.set(hash, job);
     }
     const filename = await job;
-    patchArticle(article.id, {progress: `Audio · ${++completedAudio} von ${parts.length} Abschnitten fertig`});
+    patchArticle(article.id, {progress: `Audio · ${++completedAudio} of ${parts.length} sections complete`});
     return filename;
   });
-  patchArticle(article.id, {progress: 'Audiodatei zusammenfügen'});
+  patchArticle(article.id, {progress: 'Combining audio file'});
   writeFileSync(join(dir,'concat.txt'), files.map(f => `file '${f}'`).join('\n'));
   await exec('ffmpeg', ['-y','-v','error','-f','concat','-safe','1','-i',join(dir,'concat.txt'),'-codec:a','libmp3lame','-b:a','128k',join(dir,'episode.tmp.mp3')], {timeout: 300000});
   const {stdout} = await exec('ffprobe', ['-v','error','-show_entries','format=duration','-of','default=noprint_wrappers=1:nokey=1',join(dir,'episode.tmp.mp3')]);
   renameSync(join(dir,'episode.tmp.mp3'), join(dir,'episode.mp3'));
-  patchArticle(article.id, {status:'ready',progress:'Im Podcastfeed',error:'',publishedAt:new Date().toISOString(), duration: Number(stdout.trim()) || 0, audioBytes: statSync(join(dir,'episode.mp3')).size});
+  patchArticle(article.id, {status:'ready',progress:'In the podcast feed',error:'',publishedAt:new Date().toISOString(), duration: Number(stdout.trim()) || 0, audioBytes: statSync(join(dir,'episode.mp3')).size});
 }

@@ -40,7 +40,7 @@ test('parallel article pipelines keep text/audio order, global limits and cached
   const dir=mkdtempSync(join(tmpdir(),'redread-parallel-'));
   process.env.DATA_DIR=dir;process.env.REDREAD_ENV_FILE='';
   process.env.LLM_CONCURRENCY='3';process.env.TTS_CONCURRENCY='2';process.env.LLM_CHUNK_CHARS='3000';
-  const {addArticle,saveSettings,getArticle,articleDir,reprocessArticle,queueArticle}=await import('../packages/core/src/db');
+  const {addArticle,saveSettings,getArticle,articleDir,reprocessArticle,queueArticle,listAudioVersions,getAudioVersion}=await import('../packages/core/src/db');
   const {defaults}=await import('../packages/core/src/types');
   const {processArticle,splitText,splitSpeech}=await import('../packages/core/src/pipeline');
   const mp3=join(dir,'fixture.mp3');
@@ -72,7 +72,7 @@ test('parallel article pipelines keep text/audio order, global limits and cached
   const config={...defaults,llmUrl:url,ttsUrl:url,llmModel:'test',ttsModel:'test'};
   saveSettings(config);
   try{
-    const articles=['A','B'].map(prefix=>addArticle({title:prefix,url:'',source:'test',original:Array.from({length:12},(_,i)=>`${prefix}${i} ${'Ein lesbarer Satz. '.repeat(55)}`).join('\n\n')}));
+    const articles=['A','B'].map(prefix=>addArticle({title:prefix,url:'',source:'test',original:Array.from({length:12},(_,i)=>`${prefix}${i} ${'A readable sentence. '.repeat(55)}`).join('\n\n')}));
     await Promise.all(articles.map(a=>processArticle(a)));
     assert.equal(llmPeak,3);assert.equal(ttsPeak,2);assert.equal(llmActive,0);assert.equal(ttsActive,0);
     for(const article of articles){
@@ -97,25 +97,25 @@ test('parallel article pipelines keep text/audio order, global limits and cached
     assert.equal(getArticle(repeated.id)!.status,'ready');
 
     // Short articles and scripts must fill the configured slots, not become one request.
-    const shortText=Array.from({length:6},(_,i)=>`Abschnitt ${i}: Dieser kurze Satz bleibt vollständig erhalten.`).join(' ');
+    const shortText=Array.from({length:6},(_,i)=>`Section ${i}: This short sentence remains fully intact.`).join(' ');
     const llmParts=splitText(shortText,3000,6);
     assert.equal(llmParts.length,6);
     assert.equal(llmParts.join(' '),shortText);
-    assert.throws(()=>splitText(shortText,3000,0),/Zielzahl/);
+    assert.throws(()=>splitText(shortText,3000,0),/target number/);
     const parts=splitSpeech(shortText,6);
     assert.equal(parts.length,6);
     assert.equal(parts.join(' '),shortText);
     assert(parts.every(part=>part.endsWith('.')));
-    assert.deepEqual(splitSpeech('Ein einzelnes Wortgefüge',3),['Ein','einzelnes','Wortgefüge']);
-    assert.deepEqual(splitSpeech('Wort',32),['Wort']);
+    assert.deepEqual(splitSpeech('A single phrase',3),['A','single','phrase']);
+    assert.deepEqual(splitSpeech('Word',32),['Word']);
     assert.deepEqual(splitSpeech('   ',6),[]);
-    const longParts=splitSpeech('Langwort'.repeat(1000),6);
+    const longParts=splitSpeech('Longword'.repeat(1000),6);
     assert(longParts.every(part=>part.length<=3000));
-    assert.equal(longParts.join(''),'Langwort'.repeat(1000));
+    assert.equal(longParts.join(''),'Longword'.repeat(1000));
 
     saveSettings({...config,llmConcurrency:10,ttsConcurrency:1});
     llmPeak=0;
-    const tenSentences=Array.from({length:10},(_,i)=>`Kurzer eindeutiger Satz Nummer ${i}.`).join(' ');
+    const tenSentences=Array.from({length:10},(_,i)=>`Short distinct sentence number ${i}.`).join(' ');
     const shortLlm=addArticle({title:'Short LLM',url:'',source:'test',original:tenSentences});
     const previousLlmCalls=llmCalls;
     await processArticle(shortLlm);
@@ -141,7 +141,7 @@ test('parallel article pipelines keep text/audio order, global limits and cached
     assert.equal(queued.language,'');
     assert.equal(queued.audioBytes,0);
     assert.equal(queued.original,shortText);
-    assert.throws(()=>reprocessArticle(short.id),/bereits verarbeitet/);
+    assert.throws(()=>reprocessArticle(short.id),/already being processed/);
     const archives=readdirSync(join(articleDir(short.id),'previous'));
     assert.equal(archives.length,1);
     assert(readFileSync(join(articleDir(short.id),'previous',archives[0],'episode.mp3')).length>0);
@@ -149,6 +149,26 @@ test('parallel article pipelines keep text/audio order, global limits and cached
     assert.equal(llmCalls,beforeReprocess.llm+3);
     assert.equal(ttsCalls,beforeReprocess.tts+6);
     assert.equal(getArticle(short.id)!.status,'ready');
+    // Audio-only regeneration keeps the text/language and bypasses all LLM calls.
+    const completed=getArticle(short.id)!;
+    const beforeAudioOnly={llm:llmCalls,tts:ttsCalls,detection:detectionCalls};
+    const audioOnly=reprocessArticle(short.id,'new-voice','audio');
+    assert.equal(audioOnly.script,completed.script);assert.equal(audioOnly.language,completed.language);
+    assert.equal(readFileSync(join(articleDir(short.id),'script.txt'),'utf8'),completed.script);
+    const history=listAudioVersions(short.id);
+    assert.equal(history.length,2);
+    assert.equal(history[0].publishedAt,completed.publishedAt);
+    assert.equal(history[0].voice,JSON.parse(completed.recipe).voice);
+    assert.equal(getAudioVersion(short.id,history[0].versionId)?.audioBytes,completed.audioBytes);
+    assert.equal(getAudioVersion(short.id,'00000000-0000-0000-0000-000000000000'),undefined);
+    assert.throws(()=>getAudioVersion(short.id,'../../outside'),/Invalid version/);
+    await processArticle(audioOnly);
+    assert.equal(llmCalls,beforeAudioOnly.llm);assert.equal(detectionCalls,beforeAudioOnly.detection);
+    assert.equal(ttsCalls,beforeAudioOnly.tts+6);assert.equal(getArticle(short.id)!.script,completed.script);
+    assert.deepEqual(voices.slice(-6),Array(6).fill('new-voice'));
+    const noScript=addArticle({title:'No script',url:'',source:'test',original:'Original text.'});
+    assert.throws(()=>reprocessArticle(noScript.id,'','audio'),/listening version/);
+    assert.equal(getArticle(noScript.id)!.status,'draft');
     // Recognition precedes processing and selects one voice for all chunks.
     saveSettings({...config,ttsConcurrency:2,languageVoices:{de:'german-voice',en:'english-voice'}});
     for(const [language,expected] of [['de','german-voice'],['en-US','english-voice'],['fr',config.voice],['und',config.voice]]) {
@@ -163,7 +183,7 @@ test('parallel article pipelines keep text/audio order, global limits and cached
       assert.deepEqual(voices.slice(beforeVoices),[expected,expected]);
     }
     detected='de';
-    const custom=addArticle({title:'Eigene Stimme',url:'',source:'test',original:'First sentence for recognition. Second sentence for parallel speech.'});
+    const custom=addArticle({title:'Custom voice',url:'',source:'test',original:'First sentence for recognition. Second sentence for parallel speech.'});
     const beforeCustom=voices.length;
     await processArticle(queueArticle(custom.id,'custom-reference'));
     assert.equal(getArticle(custom.id)!.voice,'custom-reference');

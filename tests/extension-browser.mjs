@@ -15,7 +15,7 @@ async function until(check,timeout=45000){const end=Date.now()+timeout;while(Dat
 const fixture=createServer(async(req,res)=>{
   if(req.url.startsWith('/result/')){let text='';for await(const c of req)text+=c;results.set(req.url.split('/').pop(),JSON.parse(text));res.end('ok');return;}
   res.setHeader('Content-Type','text/html');
-  res.end(`<!doctype html><html lang="de"><head><title>Ein echter Browserartikel</title></head><body><nav>Navigation</nav><article><h1>Ein echter Browserartikel</h1><p>${'Ein interessanter Artikel über Browsererweiterungen und Podcasts. '.repeat(30)}</p><form><input value="do-not-send-me"></form></article><script>document.querySelector('article').append(Object.assign(document.createElement('p'),{textContent:'Dieser Absatz wurde erst im Browser erzeugt.'}));</script></body></html>`);
+  res.end(`<!doctype html><html lang="en"><head><title>A real browser article</title></head><body><nav>Navigation</nav><article><h1>A real browser article</h1><p>${'An interesting article about browser extensions and podcasts. '.repeat(30)}</p><form><input value="do-not-send-me"></form></article><script>document.querySelector('article').append(Object.assign(document.createElement('p'),{textContent:'This paragraph was created in the browser.'}));</script></body></html>`);
 });
 fixture.listen(0,'127.0.0.1');await once(fixture,'listening');
 const fixtureUrl=`http://127.0.0.1:${fixture.address().port}`;
@@ -49,7 +49,7 @@ try{
           const article=await(await fetch(${JSON.stringify(base)}+'/api/articles/'+first.articleId)).json();
           if(article.voice!=='custom-reference')throw new Error('Custom voice was not saved');
           if(article.status!=='queued')throw new Error('Processing not queued: '+article.status);
-          if(!article.original.includes('Dieser Absatz wurde erst im Browser erzeugt.'))throw new Error('Rendered DOM was not captured');
+          if(!article.original.includes('This paragraph was created in the browser.'))throw new Error('Rendered DOM was not captured');
           if(article.original.includes('do-not-send-me'))throw new Error('Form value leaked');
           const repeat=await submitTab(tab.id);if(repeat.articleId!==first.articleId)throw new Error('Repeated submit duplicated');
           const state=await ext.storage.local.get('submission:'+tab.id);if(state['submission:'+tab.id].state!=='saved')throw new Error('Status missing');
@@ -68,21 +68,21 @@ try{
         const popupCreated=context.waitForEvent('page');
         await worker.evaluate(url=>chrome.tabs.create({url,active:false}),results.get(browser).popup);
         const popup=await popupCreated;await popup.waitForLoadState();
-        await expect(popup.getByRole('heading',{name:'Ein echter Browserartikel'})).toBeVisible();
-        await expect(popup.getByRole('button',{name:'✓ In deiner Bibliothek'})).toBeDisabled();
-        await expect(popup.getByRole('link',{name:'Artikel in redread öffnen ↗'})).toHaveAttribute('href',new RegExp('article='+results.get(browser).id));
+        await expect(popup.getByRole('heading',{name:'A real browser article'})).toBeVisible();
+        await expect(popup.getByRole('button',{name:'✓ In your library'})).toBeDisabled();
+        await expect(popup.getByRole('link',{name:'Open article in redread ↗'})).toHaveAttribute('href',new RegExp('article='+results.get(browser).id));
         await popup.screenshot({path:'/tmp/redread-extension-popup.png'});
-        await popup.getByRole('button',{name:'Einstellungen',exact:true}).click();
-        await expect(popup.getByLabel('Adresse deiner redread-Webapp')).toHaveValue(base);
-        await popup.getByRole('button',{name:'Speichern & verbinden'}).click();
-        await expect(popup.getByRole('heading',{name:'Ein echter Browserartikel'})).toBeVisible();
-        await popup.getByRole('button',{name:'Einstellungen',exact:true}).click();
+        await popup.getByRole('button',{name:'Settings',exact:true}).click();
+        await expect(popup.getByLabel('Address of your redread web app')).toHaveValue(base);
+        await popup.getByRole('button',{name:'Save & connect'}).click();
+        await expect(popup.getByRole('heading',{name:'A real browser article'})).toBeVisible();
+        await popup.getByRole('button',{name:'Settings',exact:true}).click();
         await popup.screenshot({path:'/tmp/redread-extension-settings.png'});
         // Required test-only host grants cannot be revoked like optional grants.
         await popup.evaluate(()=>{chrome.permissions.remove=async()=>true;});
-        await popup.getByRole('button',{name:'Ausloggen',exact:true}).click();
-        await expect(popup.getByLabel('Adresse deiner redread-Webapp')).toHaveValue('');
-        await expect(popup.getByRole('button',{name:'Einstellungen',exact:true})).toBeHidden();
+        await popup.getByRole('button',{name:'Log out',exact:true}).click();
+        await expect(popup.getByLabel('Address of your redread web app')).toHaveValue('');
+        await expect(popup.getByRole('button',{name:'Settings',exact:true})).toBeHidden();
       }finally{await context.close();}
     }else{
       const runner=spawn(process.execPath,['node_modules/web-ext/bin/web-ext.js','run','--source-dir',dir,'--firefox',process.env.FIREFOX_PATH||firefox.executablePath(),'--no-reload','--no-input','--no-config-discovery','--args=-headless'],{stdio:['ignore','pipe','pipe']});children.push(runner);

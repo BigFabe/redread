@@ -26,30 +26,30 @@ function showConnection(visible:boolean) {
 function show(submission:Submission) {
   status.textContent=submission.message;status.className=`status ${submission.state}`;
   submit.disabled=submission.state!=='error';voice.disabled=submission.state!=='error';
-  submit.textContent=submission.state==='sending'?'Wird übertragen …':submission.state==='saved'?'✓ In deiner Bibliothek':'Erneut versuchen';
+  submit.textContent=submission.state==='sending'?'Sending…':submission.state==='saved'?'✓ In your library':'Try again';
   if(submission.state==='saved'&&submission.articleId){open.href=`${submission.serverUrl}/?article=${encodeURIComponent(submission.articleId)}`;open.hidden=false;}
 }
 async function refresh() {
   const config=await ext.storage.local.get('serverUrl');base=typeof config.serverUrl==='string'?config.serverUrl:'';
   open.hidden=true;open.removeAttribute('href');submit.disabled=true;
-  voice.replaceChildren(new Option('Automatisch / Standardstimme',''));voice.disabled=false;voiceField.hidden=true;
-  submit.textContent='Artikel hörbar machen ↗';status.className='status';
+  voice.replaceChildren(new Option('Automatic / default voice',''));voice.disabled=false;voiceField.hidden=true;
+  submit.textContent='Make article listenable ↗';status.className='status';
   showConnection(!base);
   if(!base){tabId=undefined;url='';return;}
   const [tab]=await ext.tabs.query({active:true,currentWindow:true});tabId=tab?.id;url=tab?.url||'';
-  title.textContent=tab?.title||'Aktuelle Seite';
-  if(!tabId||!/^https?:\/\//.test(url)){source.textContent='Keine Artikelseite';status.textContent='';return;}
+  title.textContent=tab?.title||'Current page';
+  if(!tabId||!/^https?:\/\//.test(url)){source.textContent='Not an article page';status.textContent='';return;}
   source.textContent=new URL(url).hostname;
-  status.textContent='Der Artikeltext wird erst beim Senden ausgelesen.';
+  status.textContent='The article text will only be read when you send it.';
   try{
     const voices=await message<{name:string;voice:string}[]>({type:'voices'});
     for(const item of voices)voice.add(new Option(item.name,item.voice));
     voiceField.hidden=!voices.length;
-  }catch{status.textContent='Stimmen konnten nicht geladen werden. Erneut öffnen oder mit Standardstimme senden.';}
+  }catch{status.textContent='Voices could not be loaded. Open the extension again or send using the default voice.';}
   submit.disabled=false;
   const previous=(await ext.storage.local.get(submissionKey(tabId)))[submissionKey(tabId)] as Submission|undefined;
   if(previous?.url===url&&previous.serverUrl===base){
-    if(previous.state==='sending'&&Date.now()-previous.updatedAt>60000)show({...previous,state:'error',message:'Übertragung nicht bestätigt. Bitte zuerst in der Bibliothek prüfen, bevor du erneut sendest.'});
+    if(previous.state==='sending'&&Date.now()-previous.updatedAt>60000)show({...previous,state:'error',message:'The transfer was not confirmed. Check your library before sending again.'});
     else show(previous);
   }
 }
@@ -61,11 +61,11 @@ document.querySelector('#connect-form')!.addEventListener('submit',async event=>
     const nextBase=normalizeServerUrl(input.value);
     // Request permissions within the submit gesture, before any other awaits.
     const granted=await ext.permissions.request({origins:[hostPermission(nextBase)]});
-    if(!granted)throw new Error('Ohne Serverberechtigung kann kein Artikel übertragen werden.');
-    connectionStatus.textContent='Verbindung wird geprüft …';
+    if(!granted)throw new Error('An article cannot be sent without server permission.');
+    connectionStatus.textContent='Checking connection…';
     const result=await message<{ready:boolean}>({type:'check',serverUrl:nextBase});
     await ext.storage.local.set({serverUrl:nextBase});
-    connectionStatus.textContent=result.ready?'Verbunden.':'Verbunden. Auf dem Server fehlen noch LLM-/TTS-Modelle; Artikel werden zunächst als Entwürfe gespeichert.';
+    connectionStatus.textContent=result.ready?'Connected.':'Connected. The server still needs LLM and TTS models; articles will be saved as drafts for now.';
     connectionStatus.className='status saved';
     await refresh();
   }catch(error){connectionStatus.textContent=(error as Error).message;connectionStatus.className='status error';}
@@ -86,9 +86,9 @@ logout.addEventListener('click',async()=>{
 submit.addEventListener('click',async()=>{
   if(!base){showConnection(true);return;}
   if(tabId===undefined)return;
-  submit.disabled=true;voice.disabled=true;submit.textContent='Wird übertragen …';status.textContent='Artikel auslesen und übertragen …';status.className='status sending';
+  submit.disabled=true;voice.disabled=true;submit.textContent='Sending…';status.textContent='Reading and sending article…';status.className='status sending';
   try{show(await message<Submission>({type:'submit',tabId,voice:voice.value}));}
-  catch(error){status.textContent=(error as Error).message;status.className='status error';submit.disabled=false;voice.disabled=false;submit.textContent='Erneut versuchen';}
+  catch(error){status.textContent=(error as Error).message;status.className='status error';submit.disabled=false;voice.disabled=false;submit.textContent='Try again';}
 });
 ext.storage.onChanged.addListener((changes,area)=>{
   if(area==='local'&&tabId!==undefined){const value=changes[submissionKey(tabId)]?.newValue as Submission|undefined;if(value?.url===url&&value.serverUrl===base)show(value);}

@@ -1,2 +1,2 @@
-- expose den dev server via Tailscale
-- Halte die Konfigurationsoptionen in `.env` und den Einstellungen der Webapp synchron: Neue oder geänderte Optionen müssen an beiden Stellen verfügbar sein. `.env` ist dauerhaft; Webapp-Einstellungen überschreiben sie nur temporär bis zum Worker-Neustart.
+- Expose the development server through Tailscale.
+- Keep the configuration options in `.env` and the web app settings synchronized: new or changed options must be available in both places. `.env` is persistent; web app settings are stored persistently in SQLite and override `.env` even after restarts until they are explicitly reset.
