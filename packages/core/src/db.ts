@@ -10,7 +10,7 @@ export const dataDir = resolveDataDir(process.cwd(), process.env.DATA_DIR);
 mkdirSync(dataDir, { recursive: true, mode: 0o700 });
 const db = new DatabaseSync(join(dataDir, 'redread.sqlite'));
 chmodSync(join(dataDir, 'redread.sqlite'), 0o600);
-db.exec(`PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;
+db.exec(`PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS instance (id INTEGER PRIMARY KEY CHECK(id=1), serverId TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS articles (
