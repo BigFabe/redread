@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import { PlaybackSync, type SyncView } from './playback-sync';
 
+const RESUME_REWIND_MS = 10000;
+
 export function usePlaybackProgress(articleId:string,audioId:string,audio:RefObject<HTMLAudioElement|null>) {
   const [view,setView] = useState<SyncView>({message:'Hörposition wird geladen…'});
   const [starting,setStarting] = useState(false);
@@ -69,8 +71,11 @@ export function usePlaybackProgress(articleId:string,audioId:string,audio:RefObj
         const snapshot = await sync?.prepare();
         if(disposed||attempt!==token)return;
         if(snapshot) {
+          // Keep the actual checkpoint intact until playback really starts.
+          // A cancelled/blocked autoplay must not repeatedly subtract time.
+          active = false;
           completed = snapshot.completed;
-          await restore(snapshot.completed?0:snapshot.positionMs);
+          await restore(snapshot.completed?0:Math.max(0,snapshot.positionMs-RESUME_REWIND_MS));
         }
         if(disposed||attempt!==token)return;
         completed = false;

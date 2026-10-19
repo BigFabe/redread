@@ -15,7 +15,7 @@ public final class PlaybackService extends Service {
     private ProgressSync sync;
     private ProgressSync.Key key;
     private boolean prepared, resumeOnGain, restoring, seekPending, completed, wantPlay, conflict;
-    private boolean seekIsRestore, replayAfterRestore;
+    private boolean seekIsRestore, replayAfterRestore, checkpointReady;
     private int generation, operation, seekTarget, heartbeat;
     private Integer queuedSeek;
     private Intent pendingLoad;
@@ -24,6 +24,7 @@ public final class PlaybackService extends Service {
     String title = "", id = "", base = "", audioId = "", serverId = "", error = "", syncStatus = "Checking progress…";
     float speed = 1f;
     private static final String CHANNEL = "playback";
+    private static final int RESUME_REWIND_MS = 10000;
     private final Runnable persist = new Runnable() {
         public void run() {
             if (!playing()) return;
@@ -145,7 +146,7 @@ public final class PlaybackService extends Service {
     }
     private boolean valid(MediaPlayer p, int loaded) { return current == this && generation == loaded && player == p; }
     private void checkpoint(boolean flush) {
-        if (prepared && !restoring && !seekPending && key != null)
+        if (prepared && checkpointReady && !restoring && !seekPending && key != null)
             sync.snapshot(key, completed ? duration() : position(), completed, flush);
     }
     boolean playing() { return prepared && player != null && player.isPlaying(); }
@@ -157,6 +158,7 @@ public final class PlaybackService extends Service {
     void seek(int value) {
         if (!prepared || restoring) return;
         int target = Math.max(0, Math.min(duration(), value));
+        checkpointReady = true; // Explicit seeks are saved, unlike an unplayed resume preview.
         if (seekPending) { queuedSeek = target; return; }
         beginSeek(target, false);
     }
@@ -174,7 +176,7 @@ public final class PlaybackService extends Service {
     /** Fetch before every start/resume. No late network callback is allowed to seek running audio. */
     private void restore(boolean autoplay) {
         if (!prepared) return;
-        restoring = true; wantPlay = autoplay;
+        restoring = true; checkpointReady = false; wantPlay = autoplay;
         final int loaded = generation, request = ++operation;
         final MediaPlayer expected = player;
         syncStatus = "Checking progress…"; update();
@@ -182,7 +184,9 @@ public final class PlaybackService extends Service {
             if (!valid(expected, loaded) || operation != request || playing()) return;
             syncStatus = snapshot.status; conflict = snapshot.conflict; completed = snapshot.completed;
             replayAfterRestore = completed && wantPlay;
-            int target = replayAfterRestore ? 0 : Math.min(duration(), snapshot.position);
+            int target = Math.min(duration(), snapshot.position);
+            if (replayAfterRestore) target = 0;
+            else if (!completed && wantPlay) target = Math.max(0, target - RESUME_REWIND_MS);
             if (target != player.getCurrentPosition()) beginSeek(target, true);
             else {
                 restoring = false;
@@ -203,6 +207,7 @@ public final class PlaybackService extends Service {
             wantPlay = false; error = "Another app is currently using audio."; update(); stopForeground(false); return;
         }
         error = ""; player.start(); player.setPlaybackParams(new PlaybackParams().setSpeed(speed));
+        checkpointReady = true;
         handler.removeCallbacks(persist); heartbeat = 0; handler.postDelayed(persist, 5000); update();
     }
     void pause() { pausePlayback(true); }
@@ -253,7 +258,7 @@ public final class PlaybackService extends Service {
         ((NotificationManager) getSystemService(NOTIFICATION_SERVICE)).notify(1, notification());
     }
     private void releasePlayer() {
-        generation++; operation++; prepared = false; restoring = false; seekPending = false; queuedSeek = null; wantPlay = false;
+        generation++; operation++; prepared = false; restoring = false; seekPending = false; queuedSeek = null; wantPlay = false; checkpointReady = false;
         pendingLoad = null; pendingStop = false;
         handler.removeCallbacks(persist);
         if (player != null) { player.release(); player = null; }
