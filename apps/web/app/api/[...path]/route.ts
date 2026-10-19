@@ -75,10 +75,10 @@ async function handleRequest(req: Request, context: Context) {
     if (resource !== 'articles') return json({error:'Not found.'},404);
     if (!id && req.method === 'GET') return json(listArticles().map(({original,script,recipe,...a}) => ({...a,excerpt:script.trim().slice(0,220),wordCount:original.split(/\s+/).length,hasScript:!!script})));
     if (!id && req.method === 'POST') {
-      const input = z.object({url:z.union([httpUrl,z.literal('')]).optional(), title:z.string().trim().max(300).optional(),text:z.string().trim().max(200000).optional(),process:z.boolean().optional(),voice:z.string().trim().max(200).optional()}).parse(await req.json());
+      const input = z.object({url:z.union([httpUrl,z.literal('')]).optional(), title:z.string().trim().max(300).optional(),text:z.string().trim().max(200000).optional(),source:z.literal('PDF').optional(),process:z.boolean().optional(),voice:z.string().trim().max(200).optional()}).parse(await req.json());
       if (!input.text && !input.url) return json({error:'Please provide a URL or paste article text.'},400);
       const data = input.text
-        ? {title:input.title || input.text.split('\n')[0].slice(0,100), original:input.text, url:input.url || '',source:input.url ? new URL(input.url).hostname : 'Custom text'}
+        ? {title:input.title || input.text.split('\n')[0].slice(0,100), original:input.text, url:input.url || '',source:input.url ? new URL(input.url).hostname : input.source || 'Custom text'}
         : await extractArticle(input.url!);
       const a = addArticle({...data,title:input.title || data.title});
       if(input.voice)patchArticle(a.id,{voice:input.voice});

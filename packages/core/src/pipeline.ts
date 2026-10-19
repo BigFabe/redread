@@ -11,6 +11,7 @@ import { languagePrompt, parseDetectedLanguage, voiceForLanguage } from './langu
 import { normalizeArticleText } from './text';
 import { chapterPrompt, chapterSections, chapterMetadata } from './chapters';
 const exec = promisify(execFile);
+const noSpokenContent = '[[NO_SPOKEN_CONTENT]]';
 // Global within the single worker process, not multiplied by active articles.
 const llmSlot = createLimiter(() => settings().llmConcurrency);
 const ttsSlot = createLimiter(() => settings().ttsConcurrency);
@@ -117,7 +118,7 @@ export async function processArticle(article: Article, signal?: AbortSignal) {
     update({language});
   }
   s.voice=article.voice||voiceForLanguage(language,s.languageVoices,s.voice);
-  const textSettings = {...s, prompt: `${s.prompt}\n\n${chapterPrompt}`};
+  const textSettings = {...s, prompt: `${s.prompt}\n\n${chapterPrompt}\n\nIf this excerpt contains only material that the instructions above require you to remove (for example, bibliographic references), return exactly ${noSpokenContent} and nothing else. Use this marker only when no spoken content remains, never for substantive prose. Do not return an empty response. Omit headings that belong only to removed material.`};
   const recipe = {llmUrl: s.llmUrl, llmModel: s.llmModel, prompt: textSettings.prompt, ttsProvider: s.ttsProvider, ttsUrl: s.ttsUrl, ttsModel: s.ttsModel, voice: s.voice, language};
   update({recipe: JSON.stringify(recipe)});
   let script = article.script;
@@ -135,7 +136,8 @@ export async function processArticle(article: Article, signal?: AbortSignal) {
         job = (async () => {
           const file = join(dir, `text-${hash}.txt`);
           if (existsSync(file)) return readFileSync(file, 'utf8');
-          const text = await llmSlot(() => prepareText(textSettings, part, signal), signal);
+          const output = await llmSlot(() => prepareText(textSettings, part, signal), signal);
+          const text = output === noSpokenContent ? '' : output;
           signal?.throwIfAborted();
           writeFileSync(file, text, {mode: 0o600});
           return text;
@@ -146,7 +148,7 @@ export async function processArticle(article: Article, signal?: AbortSignal) {
       update({progress: `Listening version · ${++completed} of ${parts.length} sections complete`});
       return text;
     });
-    script = result.join('\n\n');
+    script = result.filter(text => text.trim()).join('\n\n');
     update({script});
   }
   update({status: 'speaking'});

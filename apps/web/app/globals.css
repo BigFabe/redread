@@ -45,7 +45,8 @@ select{font:inherit;border:1px solid #e2dfe7;background:white;border-radius:6px;
 .card-monogram{position:absolute;font-family:var(--heading);font-weight:800;font-size:115px;line-height:1;letter-spacing:-10px;top:25px;right:25px;opacity:.36;user-select:none}.card-monogram span{font-size:70px;vertical-align:top;letter-spacing:-12px}.card-art .wave{position:absolute;left:20px;bottom:50px;width:95px;opacity:.7}
 
 .article-card{display:flex;flex-direction:column}
-.card-open{display:block;width:100%;padding:0;border:0;background:transparent;text-align:left;color:inherit;flex:1;min-width:0}
+.card-open{display:flex;flex-direction:column;align-items:stretch;justify-content:flex-start;width:100%;padding:0;border:0;background:transparent;text-align:left;color:inherit;flex:1;min-width:0}
+.card-open .card-art{flex-shrink:0}
 .card-open:focus-visible{outline-offset:-3px}
 .card-open .card-body{padding-bottom:0}
 .card-open .card-body p{margin-bottom:10px}
@@ -195,3 +196,12 @@ html{scrollbar-gutter:stable}
 .player-chapter-menu li small,.player-chapter-menu time{font-variant-numeric:tabular-nums;font-size:10px;color:var(--muted);flex-shrink:0}
 .player-chapter-menu li small{min-width:18px}
 @media(max-width:600px){.player-chapter-menu{left:20px}.player-chapter-current{gap:6px}}
+
+.reader-text :is(h1,h2,h3,h4,h5,h6){margin:1.3em 0 .5em;font-family:var(--heading);font-weight:750;line-height:1.4;letter-spacing:-.025em;color:var(--ink);white-space:normal}
+.reader-text :is(h1,h2,h3,h4,h5,h6):first-child{margin-top:0}
+.reader-text h1{font-size:1.75em}
+.reader-text h2{font-size:1.5em}
+.reader-text h3{font-size:1.3em}
+.reader-text h4{font-size:1.15em}
+.reader-text h5{font-size:1.08em}
+.reader-text h6{font-size:1em}

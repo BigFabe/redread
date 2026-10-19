@@ -212,9 +212,10 @@ public final class PlaybackService extends Service {
     void rate(float value) {
         if (value < 0.5f || value > 2.5f) return;
         speed = value; getSharedPreferences("redread", 0).edit().putFloat("speed", value).apply();
-        if (prepared && !restoring && !seekPending) {
-            boolean active = playing(); player.setPlaybackParams(new PlaybackParams().setSpeed(speed)); if (!active) player.pause(); update();
+        if (prepared && !restoring) {
+            boolean active = playing(); player.setPlaybackParams(new PlaybackParams().setSpeed(speed)); if (!active) player.pause();
         }
+        update();
     }
     /** Fetch before every start/resume. No late network callback is allowed to seek running audio. */
     private void restore(boolean autoplay) {

@@ -18,7 +18,7 @@ public final class MainActivity extends Activity {
     private final Handler handler = new Handler();
     private LinearLayout root, list, playerBox;
     private TextView status, playerTitle, time, miniSync, fullSync;
-    private Button speedButton, resolveButton, chapterButton;
+    private Button miniSpeedButton, speedButton, resolveButton, chapterButton;
     private LinearLayout conflictControls, chapterControls;
     private ImageButton toggle, fullToggle, chapterPrevious, chapterNext;
     private AlertDialog chapterDialog;
@@ -112,6 +112,7 @@ public final class MainActivity extends Activity {
         playerBox = column(); playerBox.setPadding(dp(12), dp(8), dp(12), dp(8)); playerBox.setBackground(background(Color.WHITE)); playerBox.setVisibility(View.GONE);
         LinearLayout mini = row(); playerTitle = text("", 14, INK); bold(playerTitle); playerTitle.setMaxLines(2); playerTitle.setEllipsize(TextUtils.TruncateAt.END);
         mini.addView(playerTitle, new LinearLayout.LayoutParams(0, dp(56), 1)); playerTitle.setOnClickListener(v -> showPlayer()); playerTitle.setContentDescription("Open player");
+        miniSpeedButton = button("1×", this::showPlaybackSpeed); miniSpeedButton.setSingleLine(true); mini.addView(miniSpeedButton, new LinearLayout.LayoutParams(dp(56), dp(48)));
         toggle = icon("play", "Play", this::togglePlayback); mini.addView(toggle); mini.addView(icon("down", "Open player", this::showPlayer)); playerBox.addView(mini);
         miniProgress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal); miniProgress.setProgressTintList(android.content.res.ColorStateList.valueOf(RED)); playerBox.addView(miniProgress, new LinearLayout.LayoutParams(-1, dp(2)));
         miniSync = text("", 12, MUTED); playerBox.addView(miniSync);
@@ -149,7 +150,7 @@ public final class MainActivity extends Activity {
         LinearLayout controls = row(); controls.addView(button("−15 s", () -> { if (PlaybackService.current != null) PlaybackService.current.seek(PlaybackService.current.position()-15000); }), new LinearLayout.LayoutParams(0, dp(48), 1));
         fullToggle = icon("play", "Play", this::togglePlayback); controls.addView(fullToggle, new LinearLayout.LayoutParams(0, dp(48), 1));
         controls.addView(button("+30 s", () -> { if (PlaybackService.current != null) PlaybackService.current.seek(PlaybackService.current.position()+30000); }), new LinearLayout.LayoutParams(0, dp(48), 1));
-        speedButton = button("1×", () -> new AlertDialog.Builder(this).setTitle("Speed").setItems(new String[]{"0.75×", "1×", "1.25×", "1.5×", "1.75×", "2×"}, (d, which) -> { if (PlaybackService.current != null) PlaybackService.current.rate(new float[]{.75f,1f,1.25f,1.5f,1.75f,2f}[which]); }).show()); controls.addView(speedButton, new LinearLayout.LayoutParams(0, dp(48), 1)); panel.addView(controls);
+        speedButton = button("1×", this::showPlaybackSpeed); speedButton.setSingleLine(true); controls.addView(speedButton, new LinearLayout.LayoutParams(0, dp(48), 1)); panel.addView(controls);
         chapterControls = row();
         chapterPrevious = icon("previous", "Previous chapter", () -> { if (PlaybackService.current != null) PlaybackService.current.skipChapter(false); updatePlayer(); });
         chapterNext = icon("next", "Next chapter", () -> { if (PlaybackService.current != null) PlaybackService.current.skipChapter(true); updatePlayer(); });
@@ -157,6 +158,20 @@ public final class MainActivity extends Activity {
         chapterControls.addView(chapterPrevious); chapterControls.addView(chapterButton, new LinearLayout.LayoutParams(0, -2, 1)); chapterControls.addView(chapterNext); panel.addView(chapterControls);
         ScrollView scroll = new ScrollView(this); scroll.addView(panel); playerDialog.setContentView(scroll); playerDialog.show();
         playerDialog.getWindow().setLayout(-1, -2); playerDialog.getWindow().setGravity(Gravity.BOTTOM); updatePlayer();
+    }
+    private void showPlaybackSpeed() {
+        final PlaybackService p = PlaybackService.current; if (p == null) return;
+        final float[] speeds = {.75f, 1f, 1.25f, 1.5f, 1.75f, 2f};
+        String[] labels = new String[speeds.length]; int selected = -1;
+        java.text.NumberFormat format = java.text.NumberFormat.getNumberInstance();
+        for (int i = 0; i < speeds.length; i++) {
+            labels[i] = format.format(speeds[i]) + "×";
+            if (speeds[i] == p.speed) selected = i;
+        }
+        new AlertDialog.Builder(this).setTitle("Playback speed").setSingleChoiceItems(labels, selected, (dialog, which) -> {
+            if (PlaybackService.current == p) { p.rate(speeds[which]); updatePlayer(); }
+            dialog.dismiss();
+        }).setNegativeButton("Cancel", null).show();
     }
     private void showChapters() {
         final PlaybackService p = PlaybackService.current;
@@ -314,11 +329,14 @@ public final class MainActivity extends Activity {
         playerBox.setVisibility(p == null ? View.GONE : View.VISIBLE); if (p == null) return;
         boolean active = p.playing() || p.playRequested();
         playerTitle.setText(p.error.isEmpty() ? p.title : p.error); toggle.setImageDrawable(new Glyph(active ? "pause" : "play", RED)); toggle.setContentDescription(active ? "Pause" : "Play");
+        String speedLabel = java.text.NumberFormat.getNumberInstance().format(p.speed) + "×";
+        miniSpeedButton.setText(speedLabel); miniSpeedButton.setContentDescription("Playback speed: " + speedLabel); miniSpeedButton.setTooltipText(miniSpeedButton.getContentDescription());
         miniProgress.setMax(p.duration()); miniProgress.setProgress(p.position());
         miniSync.setText(p.syncStatus); resolveButton.setVisibility(p.hasConflict() ? View.VISIBLE : View.GONE);
         if (playerDialog != null && playerDialog.isShowing()) {
             fullSync.setText(p.syncStatus); conflictControls.setVisibility(p.hasConflict() ? View.VISIBLE : View.GONE);
-            fullTitle.setText(p.title); fullToggle.setImageDrawable(new Glyph(active ? "pause" : "play", RED)); fullToggle.setContentDescription(active ? "Pause" : "Play"); speedButton.setText(p.speed + "×");
+            fullTitle.setText(p.title); fullToggle.setImageDrawable(new Glyph(active ? "pause" : "play", RED)); fullToggle.setContentDescription(active ? "Pause" : "Play");
+            speedButton.setText(speedLabel); speedButton.setContentDescription("Playback speed: " + speedLabel); speedButton.setTooltipText(speedButton.getContentDescription());
             if (!seeking) { seek.setMax(p.duration()); seek.setProgress(p.position()); }
             time.setText(p.error.isEmpty() ? clock(p.position()) + " / " + clock(p.duration()) : p.error);
             int index = p.chapterIndex();
