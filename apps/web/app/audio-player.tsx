@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useId, useRef, useState, type CSSProperties, type RefObject } from 'react';
-import { AudioLines, Download, LoaderCircle, Pause, Play, Volume2, VolumeX, X } from 'lucide-react';
+import { AudioLines, ChevronDown, Download, List, LoaderCircle, Pause, Play, SkipBack, SkipForward, Volume2, VolumeX, X } from 'lucide-react';
 import type { PlayableArticle } from '@redread/core/types';
 import { timestamp } from '@redread/core/duration';
 import { usePlaybackProgress } from './use-playback-progress';
@@ -34,6 +34,14 @@ export default function AudioPlayer({ article, onClose, onOpen, audioRef, playRe
   const rateId = useId();
   const [muted, setMuted] = useState(false);
   const [error, setError] = useState('');
+  const chapters = article.chapters || [];
+  const chapterIndex = Math.max(0, chapters.findLastIndex(chapter => chapter.startTime <= position + 0.05));
+  const currentChapter = chapters[chapterIndex];
+  const chapterMenuId = useId();
+  const chapterMenu = useRef<HTMLDivElement>(null);
+  const chapterButton = useRef<HTMLButtonElement>(null);
+  const chapterDisabled = !duration || !!error || progress.starting;
+  const restartChapter = currentChapter && position > currentChapter.startTime + 3;
 
   useEffect(() => { if (audio.current) audio.current.playbackRate = rate; }, [audio, rate]);
   useEffect(() => { playRef.current=progress.play; return ()=>{playRef.current=null;}; },[playRef,progress.play]);
@@ -96,7 +104,16 @@ export default function AudioPlayer({ article, onClose, onOpen, audioRef, playRe
         <button className="icon-button" aria-label="Close player" onClick={onClose}><X size={19}/></button>
       </div>
     </div>
-    <div className="player-timeline"><time>{timestamp(position/rate)}</time><input type="range" min={0} max={duration || 1} step={0.1} value={Math.min(position,duration || 1)} disabled={!duration||!!error||progress.starting} aria-label="Wiedergabeposition" aria-valuetext={`${timestamp(position/rate)} von ${timestamp(duration/rate)}`} style={{'--progress':`${duration?position/duration*100:0}%`} as CSSProperties} onChange={e => seek(Number(e.target.value))}/><time title={`Hördauer bei ${rate.toLocaleString('de-DE')}×`}>{timestamp(duration/rate)}</time></div>
+    <div className="player-timeline"><time>{timestamp(position/rate)}</time><div className="player-track"><input type="range" min={0} max={duration || 1} step={0.1} value={Math.min(position,duration || 1)} disabled={!duration||!!error||progress.starting} aria-label="Wiedergabeposition" aria-valuetext={`${timestamp(position/rate)} von ${timestamp(duration/rate)}`} style={{'--progress':`${duration?position/duration*100:0}%`} as CSSProperties} onChange={e => seek(Number(e.target.value))}/>{duration>0&&<span className="player-chapter-marks" aria-hidden="true">{chapters.slice(1).map((chapter,index)=><i key={index} style={{left:`${Math.min(100,chapter.startTime/duration*100)}%`}}/>)}</span>}</div><time title={`Hördauer bei ${rate.toLocaleString('de-DE')}×`}>{timestamp(duration/rate)}</time></div>
+    {currentChapter&&<nav className="player-chapters" aria-label="Kapitelnavigation">
+      <button type="button" className="icon-button" aria-label={restartChapter?'Zum Kapitelanfang':'Vorheriges Kapitel'} title={restartChapter?'Zum Kapitelanfang':'Vorheriges Kapitel'} disabled={chapterDisabled||chapterIndex===0&&!restartChapter} onClick={()=>seek(chapters[restartChapter?chapterIndex:Math.max(0,chapterIndex-1)].startTime)}><SkipBack size={17}/></button>
+      <button ref={chapterButton} type="button" className="player-chapter-current" popoverTarget={chapterMenuId} aria-controls={chapterMenuId} aria-haspopup="dialog" title="Kapitel auswählen"><List size={16}/><small>{chapterIndex+1}/{chapters.length}</small><span>{currentChapter.title}</span><ChevronDown size={15}/></button>
+      <button type="button" className="icon-button" aria-label="Nächstes Kapitel" title="Nächstes Kapitel" disabled={chapterDisabled||chapterIndex>=chapters.length-1} onClick={()=>seek(chapters[chapterIndex+1].startTime)}><SkipForward size={17}/></button>
+      <div ref={chapterMenu} id={chapterMenuId} popover="auto" role="dialog" aria-label="Kapitel auswählen" className="player-chapter-menu">
+        <header><strong>Kapitel</strong><button type="button" className="icon-button" aria-label="Kapitelliste schließen" popoverTarget={chapterMenuId} popoverTargetAction="hide"><X size={17}/></button></header>
+        <ol>{chapters.map((chapter,index)=><li key={index}><button type="button" aria-current={index===chapterIndex?'true':undefined} disabled={chapterDisabled} onClick={()=>{seek(chapter.startTime);chapterMenu.current?.hidePopover();chapterButton.current?.focus();}}><small>{index+1}</small><span>{chapter.title}</span><time>{timestamp(chapter.startTime/rate)}</time></button></li>)}</ol>
+      </div>
+    </nav>}
     <div className="player-sync" role="status"><span>{progress.message}</span>{progress.entry?.conflict&&<div className="player-sync-actions"><button type="button" disabled={progress.starting} onClick={()=>progress.resolve(true)}>Serverstand übernehmen</button><button type="button" disabled={progress.starting} onClick={()=>progress.resolve(false)}>Hier fortsetzen</button></div>}{progress.recoveries?.slice(0,1).map(entry=><div className="player-sync-recovery" key={entry.key}><span>Weitere lokale Position: {timestamp(entry.snapshot.positionMs/1000)}{entry.snapshot.completed?' · abgeschlossen':''}{progress.recoveries!.length>1?` · ${progress.recoveries!.length} gespeichert`:''}</span><div className="player-sync-actions"><button type="button" disabled={progress.starting} onClick={()=>progress.resolve(false,entry.key)}>Diese Position übernehmen</button><button type="button" disabled={progress.starting} onClick={()=>progress.resolve(true,entry.key)}>Serverstand behalten</button></div></div>)}</div>
     {error&&<p className="player-error" role="alert">{error}</p>}
   </section>;

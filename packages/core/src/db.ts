@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { Article, AudioVersion, PlaybackProgress, PlaybackMutation, ReprocessMode, Settings, defaults, busy } from './types';
 import { environmentSettings } from './env';
 import { resolveDataDir } from './data-path';
+import { chaptersFromRecipe } from './chapters';
 
 export const dataDir = resolveDataDir(process.cwd(), process.env.DATA_DIR);
 mkdirSync(dataDir, { recursive: true, mode: 0o700 });
@@ -72,8 +73,14 @@ export function saveSettings(s: Settings) {
   const stored = Object.fromEntries(Object.entries(s).filter(([key, value]) => JSON.stringify(value) !== JSON.stringify(base[key as keyof Settings])));
   db.prepare('INSERT INTO settings VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET data=excluded.data').run(JSON.stringify(stored));
 }
-export const listArticles = () => db.prepare('SELECT * FROM articles ORDER BY createdAt DESC').all() as unknown as Article[];
-export const getArticle = (id: string) => db.prepare('SELECT * FROM articles WHERE id=?').get(id) as unknown as Article | undefined;
+function withChapters(article: Article): Article {
+  return {...article, chapters: chaptersFromRecipe(article.recipe)};
+}
+export const listArticles = () => (db.prepare('SELECT * FROM articles ORDER BY createdAt DESC').all() as unknown as Article[]).map(withChapters);
+export function getArticle(id: string): Article | undefined {
+  const article = db.prepare('SELECT * FROM articles WHERE id=?').get(id) as unknown as Article | undefined;
+  return article ? withChapters(article) : undefined;
+}
 export function articleDir(id: string) {
   if (!/^[a-f0-9-]{36}$/.test(id)) throw new Error('Invalid article ID.');
   return join(dataDir, 'articles', id);
@@ -92,7 +99,7 @@ export function addArticle(input: Pick<Article, 'title' | 'url' | 'source' | 'or
     .run(id, input.title, input.url, input.source, input.original, new Date().toISOString());
   return getArticle(id)!;
 }
-export function patchArticle(id: string, patch: Partial<Omit<Article, 'id'>>, unlessCancelled = false) {
+export function patchArticle(id: string, patch: Partial<Omit<Article, 'id' | 'chapters'>>, unlessCancelled = false) {
   const entries = Object.entries(patch);
   const allowed = new Set(['title','url','source','original','script','status','progress','error','publishedAt','duration','audioBytes','recipe','language','voice','audioId']);
   if (!entries.length || entries.some(([key]) => !allowed.has(key))) throw new Error('Invalid change.');
@@ -123,7 +130,7 @@ export function getAudioVersion(id: string, versionId: string): AudioVersion | u
   const article: Article = JSON.parse(readFileSync(join(dir, 'article.json'), 'utf8'));
   if (article.status !== 'ready' || !article.audioBytes) return;
   const recipe = article.recipe ? JSON.parse(article.recipe) : {};
-  return {versionId, audioId:versionId, publishedAt:article.publishedAt, duration:article.duration, audioBytes:article.audioBytes, voice:recipe.voice || article.voice || ''};
+  return {versionId, audioId:versionId, publishedAt:article.publishedAt, duration:article.duration, audioBytes:article.audioBytes, voice:recipe.voice || article.voice || '', chapters:chaptersFromRecipe(article.recipe)};
 }
 export function listAudioVersions(id: string): AudioVersion[] {
   const dir = join(articleDir(id), 'previous');
@@ -203,7 +210,7 @@ export function reprocessArticle(id: string, voice?:string, mode:ReprocessMode='
     mkdirSync(archive, {recursive:true, mode:0o700});
     writeFileSync(join(archive,'article.json'), JSON.stringify(article), {mode:0o600});
     for (const name of readdirSync(dir)) {
-      if (!/^(?:text-[a-f0-9]+\.txt|audio-[a-f0-9]+\.mp3(?:\.tmp)?|script\.txt|episode(?:\.tmp)?\.mp3|concat\.txt)$/.test(name)) continue;
+      if (!/^(?:text-[a-f0-9]+\.txt|audio-[a-f0-9]+\.mp3(?:\.tmp)?|script\.txt|episode(?:\.tmp)?\.mp3|concat\.txt|chapters\.ffmeta)$/.test(name)) continue;
       renameSync(join(dir,name),join(archive,name)); moved.push(name);
     }
     const result = patchArticle(id, {...(voice!==undefined?{voice}:{}),script:mode==='audio'?article.script:'',language:mode==='audio'?article.language:'',status:'queued',error:'',progress:mode==='audio'?'Recreating audio':'Recreating text and audio',recipe:'',publishedAt:'',duration:0,audioBytes:0,audioId:''});

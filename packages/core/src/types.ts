@@ -1,11 +1,13 @@
 export type Status = 'draft' | 'queued' | 'preparing' | 'speaking' | 'cancelling' | 'cancelled' | 'ready' | 'failed';
+export interface AudioChapter { title: string; startTime: number; }
 export interface Article {
   id: string; title: string; url: string; source: string; original: string; script: string;
   status: Status; progress: string; error: string; createdAt: string; publishedAt: string;
   duration: number; audioBytes: number; recipe: string; language: string; voice: string; audioId: string;
+  chapters: AudioChapter[];
 }
 export type ReprocessMode = 'audio' | 'all';
-export type AudioVersion = Pick<Article, 'publishedAt' | 'duration' | 'audioBytes' | 'voice' | 'audioId'> & {versionId: string};
+export type AudioVersion = Pick<Article, 'publishedAt' | 'duration' | 'audioBytes' | 'voice' | 'audioId' | 'chapters'> & {versionId: string};
 export type PlayableArticle = Article & {versionId?: string};
 export interface PlaybackProgress {
   articleId: string; audioId: string; positionMs: number; completed: boolean;

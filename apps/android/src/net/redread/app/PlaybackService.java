@@ -5,6 +5,8 @@ import android.content.*;
 import android.media.*;
 import android.media.session.*;
 import android.os.*;
+import org.json.*;
+import java.util.ArrayList;
 
 public final class PlaybackService extends Service {
     static PlaybackService current;
@@ -23,6 +25,12 @@ public final class PlaybackService extends Service {
     private final Handler handler = new Handler(Looper.getMainLooper());
     String title = "", id = "", base = "", audioId = "", serverId = "", error = "", syncStatus = "Checking progress…";
     float speed = 1f;
+    static final class Chapter {
+        final String title;
+        final int startMs;
+        Chapter(String title, int startMs) { this.title = title; this.startMs = startMs; }
+    }
+    private final ArrayList<Chapter> chapters = new ArrayList<>();
     private static final String CHANNEL = "playback";
     private static final int RESUME_REWIND_MS = 10000;
     private final Runnable persist = new Runnable() {
@@ -76,13 +84,14 @@ public final class PlaybackService extends Service {
                 fail("Upgrade the Redread server, then refresh the library."); return START_NOT_STICKY;
             }
             ProgressSync.Key next = new ProgressSync.Key(nextBase, nextServer, nextId, nextAudio);
-            if (next.same(key) && nextBase.equals(base) && player != null) { if (prepared) play(); return START_NOT_STICKY; }
+            if (next.same(key) && nextBase.equals(base) && player != null) { loadChapters(intent); if (prepared) play(); return START_NOT_STICKY; }
             if (seekPending && !seekIsRestore) {
                 pendingLoad = new Intent(intent); pendingStop = false; pause(); return START_NOT_STICKY;
             }
             checkpoint(true); releasePlayer();
             key = next; id = nextId; base = nextBase; audioId = nextAudio; serverId = nextServer;
             title = intent.getStringExtra("title"); if (title == null) title = "redread";
+            loadChapters(intent);
             error = ""; syncStatus = "Checking progress…"; conflict = false; completed = false; wantPlay = true;
             speed = getSharedPreferences("redread", 0).getFloat("speed", 1f);
             final int loaded = generation;
@@ -143,6 +152,40 @@ public final class PlaybackService extends Service {
         else if ("forward".equals(action)) seek(position() + 30000);
         else if ("stop".equals(action)) stopPlayback();
         return START_NOT_STICKY;
+    }
+    private void loadChapters(Intent intent) {
+        chapters.clear();
+        String value = intent.getStringExtra("chapters");
+        if (value == null) return;
+        try {
+            JSONArray input = new JSONArray(value);
+            for (int i = 0; i < input.length(); i++) {
+                JSONObject item = input.optJSONObject(i); if (item == null) continue;
+                String label = item.optString("title", "").trim();
+                double seconds = item.optDouble("startTime", Double.NaN);
+                if (label.isEmpty() || !Double.isFinite(seconds) || seconds < 0 || seconds > Integer.MAX_VALUE / 1000d) continue;
+                int startMs = (int) Math.round(seconds * 1000);
+                if (!chapters.isEmpty() && startMs <= chapters.get(chapters.size() - 1).startMs) continue;
+                chapters.add(new Chapter(label, startMs));
+            }
+        } catch (JSONException ignored) { /* Older servers can omit chapter metadata. */ }
+    }
+    int chapterCount() { return chapters.size(); }
+    Chapter chapter(int index) { return chapters.get(index); }
+    int chapterIndex() {
+        if (chapters.isEmpty()) return -1;
+        int index = 0;
+        while (index + 1 < chapters.size() && chapters.get(index + 1).startMs <= position() + 50L) index++;
+        return index;
+    }
+    boolean canSeek() { return prepared && !restoring; }
+    void seekChapter(int index) {
+        if (canSeek() && index >= 0 && index < chapters.size()) seek(chapters.get(index).startMs);
+    }
+    void skipChapter(boolean forward) {
+        int index = chapterIndex(); if (index < 0) return;
+        if (forward) seekChapter(index + 1);
+        else seekChapter(position() > chapters.get(index).startMs + 3000L ? index : Math.max(0, index - 1));
     }
     private boolean valid(MediaPlayer p, int loaded) { return current == this && generation == loaded && player == p; }
     private void checkpoint(boolean flush) {
@@ -259,7 +302,7 @@ public final class PlaybackService extends Service {
     }
     private void releasePlayer() {
         generation++; operation++; prepared = false; restoring = false; seekPending = false; queuedSeek = null; wantPlay = false; checkpointReady = false;
-        pendingLoad = null; pendingStop = false;
+        pendingLoad = null; pendingStop = false; chapters.clear();
         handler.removeCallbacks(persist);
         if (player != null) { player.release(); player = null; }
     }

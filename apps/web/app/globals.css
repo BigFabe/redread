@@ -174,3 +174,24 @@ html{scrollbar-gutter:stable}
 .voice-field{gap:8px}
 .voice-field input{min-width:0;flex:1}
 .card-stop{width:36px;height:36px}
+
+.player-track{position:relative;flex:1;min-width:0;display:flex;align-items:center}
+.player-track input[type=range]{width:100%}
+.player-chapter-marks{position:absolute;inset:0 6px;pointer-events:none}
+.player-chapter-marks i{position:absolute;top:50%;width:2px;height:8px;transform:translate(-50%,-50%);background:var(--paper);box-shadow:0 0 0 1px var(--line);border-radius:1px}
+.player-chapters{display:flex;align-items:center;justify-content:center;gap:4px;margin-top:2px}
+.player-chapters>.icon-button{width:36px;height:36px}
+.player-chapter-current{anchor-name:--player-chapters;display:flex;align-items:center;gap:9px;max-width:min(460px,calc(100% - 80px));min-height:36px;padding:6px 10px;border:0;border-radius:6px;background:none;color:var(--ink);font-size:11px;text-align:left}
+.player-chapter-current:hover{background:var(--red-soft)}
+.player-chapter-current>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.player-chapter-current>small{color:var(--red);font-size:10px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.player-chapter-menu{position:fixed;position-anchor:--player-chapters;inset:auto;bottom:anchor(top);left:anchor(left);margin:0 0 12px;width:min(440px,calc(100vw - 40px));max-height:min(420px,60dvh);position-try-fallbacks:flip-inline;overflow:auto;padding:8px;border:1px solid var(--line);border-radius:10px;background:var(--paper);color:var(--ink);box-shadow:0 8px 28px #15122324}
+.player-chapter-menu header{display:flex;align-items:center;justify-content:space-between;padding:4px 8px 8px;font-size:12px;border-bottom:1px solid var(--line)}
+.player-chapter-menu ol{list-style:none;padding:4px 0 0;margin:0}
+.player-chapter-menu li>button{display:flex;align-items:center;gap:12px;width:100%;min-height:44px;padding:10px;border:0;border-radius:6px;background:none;color:var(--ink);text-align:left;font-size:12px}
+.player-chapter-menu li>button:hover,.player-chapter-menu li>button[aria-current=true]{background:var(--red-soft);color:var(--red)}
+.player-chapter-menu li>button:focus-visible{outline-offset:-2px}
+.player-chapter-menu li span{flex:1;min-width:0;overflow-wrap:anywhere;line-height:1.5}
+.player-chapter-menu li small,.player-chapter-menu time{font-variant-numeric:tabular-nums;font-size:10px;color:var(--muted);flex-shrink:0}
+.player-chapter-menu li small{min-width:18px}
+@media(max-width:600px){.player-chapter-menu{left:20px}.player-chapter-current{gap:6px}}

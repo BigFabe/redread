@@ -18,9 +18,12 @@ public final class MainActivity extends Activity {
     private final Handler handler = new Handler();
     private LinearLayout root, list, playerBox;
     private TextView status, playerTitle, time, miniSync, fullSync;
-    private Button speedButton, resolveButton;
-    private LinearLayout conflictControls;
-    private ImageButton toggle, fullToggle;
+    private Button speedButton, resolveButton, chapterButton;
+    private LinearLayout conflictControls, chapterControls;
+    private ImageButton toggle, fullToggle, chapterPrevious, chapterNext;
+    private AlertDialog chapterDialog;
+    private PlaybackService chapterPlayer;
+    private int chapterGeneration;
     private Typeface bodyFont, headingFont;
     private Dialog playerDialog;
     private TextView fullTitle;
@@ -62,7 +65,7 @@ public final class MainActivity extends Activity {
     }
     @Override protected void onResume() { super.onResume(); handler.post(tick); }
     @Override protected void onPause() { handler.removeCallbacks(tick); super.onPause(); }
-    @Override protected void onDestroy() { if (playerDialog != null) playerDialog.dismiss(); io.shutdown(); super.onDestroy(); }
+    @Override protected void onDestroy() { if (chapterDialog != null) chapterDialog.dismiss(); if (playerDialog != null) playerDialog.dismiss(); io.shutdown(); super.onDestroy(); }
     private int dp(int n) { return (int)(getResources().getDisplayMetrics().density * n + .5f); }
     private LinearLayout column() { LinearLayout l = new LinearLayout(this); l.setOrientation(LinearLayout.VERTICAL); return l; }
     private LinearLayout row() { LinearLayout l = new LinearLayout(this); l.setGravity(Gravity.CENTER_VERTICAL); return l; }
@@ -147,8 +150,35 @@ public final class MainActivity extends Activity {
         fullToggle = icon("play", "Play", this::togglePlayback); controls.addView(fullToggle, new LinearLayout.LayoutParams(0, dp(48), 1));
         controls.addView(button("+30 s", () -> { if (PlaybackService.current != null) PlaybackService.current.seek(PlaybackService.current.position()+30000); }), new LinearLayout.LayoutParams(0, dp(48), 1));
         speedButton = button("1×", () -> new AlertDialog.Builder(this).setTitle("Speed").setItems(new String[]{"0.75×", "1×", "1.25×", "1.5×", "1.75×", "2×"}, (d, which) -> { if (PlaybackService.current != null) PlaybackService.current.rate(new float[]{.75f,1f,1.25f,1.5f,1.75f,2f}[which]); }).show()); controls.addView(speedButton, new LinearLayout.LayoutParams(0, dp(48), 1)); panel.addView(controls);
+        chapterControls = row();
+        chapterPrevious = icon("previous", "Previous chapter", () -> { if (PlaybackService.current != null) PlaybackService.current.skipChapter(false); updatePlayer(); });
+        chapterNext = icon("next", "Next chapter", () -> { if (PlaybackService.current != null) PlaybackService.current.skipChapter(true); updatePlayer(); });
+        chapterButton = button("Chapters", this::showChapters); chapterButton.setGravity(Gravity.START | Gravity.CENTER_VERTICAL); chapterButton.setMaxLines(2); chapterButton.setEllipsize(TextUtils.TruncateAt.END);
+        chapterControls.addView(chapterPrevious); chapterControls.addView(chapterButton, new LinearLayout.LayoutParams(0, -2, 1)); chapterControls.addView(chapterNext); panel.addView(chapterControls);
         ScrollView scroll = new ScrollView(this); scroll.addView(panel); playerDialog.setContentView(scroll); playerDialog.show();
         playerDialog.getWindow().setLayout(-1, -2); playerDialog.getWindow().setGravity(Gravity.BOTTOM); updatePlayer();
+    }
+    private void showChapters() {
+        final PlaybackService p = PlaybackService.current;
+        if (p == null || p.chapterCount() == 0 || !p.canSeek() || chapterDialog != null && chapterDialog.isShowing()) return;
+        final int generation = p.identityGeneration();
+        String[] choices = new String[p.chapterCount()];
+        for (int i = 0; i < choices.length; i++) choices[i] = (i + 1) + ". " + p.chapter(i).title + "\n" + clock(p.chapter(i).startMs);
+        ArrayAdapter<String> adapter = new ArrayAdapter<String>(this, android.R.layout.simple_list_item_single_choice, choices) {
+            @Override public View getView(int position, View recycled, ViewGroup parent) {
+                TextView item = (TextView) super.getView(position, recycled, parent);
+                item.setTypeface(bodyFont); item.setTextSize(14); item.setTextColor(INK); item.setSingleLine(false);
+                item.setLayoutParams(new AbsListView.LayoutParams(-1, -2)); item.setMinHeight(dp(64));
+                item.setPadding(dp(20), dp(12), dp(20), dp(12)); return item;
+            }
+        };
+        chapterPlayer = p; chapterGeneration = generation;
+        chapterDialog = new AlertDialog.Builder(this).setTitle("Chapters").setSingleChoiceItems(adapter, p.chapterIndex(), (dialog, which) -> {
+            // A list opened for one episode must never seek a replacement episode.
+            if (PlaybackService.current == p && p.identityGeneration() == generation) p.seekChapter(which);
+            dialog.dismiss(); updatePlayer();
+        }).setNegativeButton("Close", null).create();
+        chapterDialog.show(); chapterDialog.getListView().setSelection(Math.max(0, p.chapterIndex() - 2));
     }
     private void serverDialog() {
         LinearLayout content = column(); content.setPadding(dp(24), dp(8), dp(24), 0);
@@ -206,7 +236,8 @@ public final class MainActivity extends Activity {
         }
         startForegroundService(new Intent(this, PlaybackService.class).setAction("load")
             .putExtra("id", article.optString("id")).putExtra("title", article.optString("title")).putExtra("base", base)
-            .putExtra("serverId", serverId).putExtra("audioId", article.optString("audioId")));
+            .putExtra("serverId", serverId).putExtra("audioId", article.optString("audioId"))
+            .putExtra("chapters", article.optJSONArray("chapters") == null ? "[]" : article.optJSONArray("chapters").toString()));
     }
     private void renderArticles() {
         if (list == null) return; list.removeAllViews();
@@ -275,7 +306,12 @@ public final class MainActivity extends Activity {
     }
     private static String clock(int ms) { int s = ms/1000; return s >= 3600 ? String.format(java.util.Locale.ROOT, "%d:%02d:%02d", s/3600, s/60%60, s%60) : String.format(java.util.Locale.ROOT, "%d:%02d", s/60, s%60); }
     private void updatePlayer() {
-        PlaybackService p = PlaybackService.current; playerBox.setVisibility(p == null ? View.GONE : View.VISIBLE); if (p == null) return;
+        PlaybackService p = PlaybackService.current;
+        if (chapterDialog != null && chapterDialog.isShowing()) {
+            if (p == null || p != chapterPlayer || p.identityGeneration() != chapterGeneration || p.chapterCount() == 0) chapterDialog.dismiss();
+            else { chapterDialog.getListView().setEnabled(p.canSeek()); chapterDialog.getListView().setItemChecked(p.chapterIndex(), true); }
+        }
+        playerBox.setVisibility(p == null ? View.GONE : View.VISIBLE); if (p == null) return;
         boolean active = p.playing() || p.playRequested();
         playerTitle.setText(p.error.isEmpty() ? p.title : p.error); toggle.setImageDrawable(new Glyph(active ? "pause" : "play", RED)); toggle.setContentDescription(active ? "Pause" : "Play");
         miniProgress.setMax(p.duration()); miniProgress.setProgress(p.position());
@@ -285,6 +321,17 @@ public final class MainActivity extends Activity {
             fullTitle.setText(p.title); fullToggle.setImageDrawable(new Glyph(active ? "pause" : "play", RED)); fullToggle.setContentDescription(active ? "Pause" : "Play"); speedButton.setText(p.speed + "×");
             if (!seeking) { seek.setMax(p.duration()); seek.setProgress(p.position()); }
             time.setText(p.error.isEmpty() ? clock(p.position()) + " / " + clock(p.duration()) : p.error);
+            int index = p.chapterIndex();
+            chapterControls.setVisibility(index < 0 ? View.GONE : View.VISIBLE);
+            if (index >= 0) {
+                chapterButton.setText("Chapters · " + (index + 1) + "/" + p.chapterCount() + "\n" + p.chapter(index).title);
+                chapterButton.setContentDescription("Choose chapter. Chapter " + (index + 1) + " of " + p.chapterCount() + ". " + p.chapter(index).title);
+                chapterButton.setEnabled(p.canSeek());
+                boolean restart = p.position() > p.chapter(index).startMs + 3000L;
+                chapterPrevious.setEnabled(p.canSeek() && (index > 0 || restart)); chapterPrevious.setAlpha(chapterPrevious.isEnabled() ? 1f : .35f);
+                chapterPrevious.setContentDescription(restart ? "Restart chapter" : "Previous chapter"); chapterPrevious.setTooltipText(chapterPrevious.getContentDescription());
+                chapterNext.setEnabled(p.canSeek() && index + 1 < p.chapterCount()); chapterNext.setAlpha(chapterNext.isEnabled() ? 1f : .35f);
+            }
         }
     }
 }

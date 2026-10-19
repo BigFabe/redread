@@ -19,6 +19,10 @@ final class Glyph extends Drawable {
             case "plus": c.drawLine(12,5,12,19,p); c.drawLine(5,12,19,12,p); break;
             case "close": c.drawLine(6,6,18,18,p); c.drawLine(18,6,6,18,p); break;
             case "down": path.moveTo(6,9); path.lineTo(12,15); path.lineTo(18,9); c.drawPath(path,p); break;
+            case "previous": case "next":
+                boolean previous = name.equals("previous");
+                c.drawLine(previous ? 5 : 19, 5, previous ? 5 : 19, 19, p);
+                path.moveTo(previous ? 19 : 5, 5); path.lineTo(previous ? 9 : 15, 12); path.lineTo(previous ? 19 : 5, 19); path.close(); c.drawPath(path,p); break;
             case "search": c.drawCircle(10.5f,10.5f,6,p); c.drawLine(15,15,20,20,p); break;
             case "settings": c.drawLine(4,7,20,7,p); c.drawLine(4,17,20,17,p); p.setStyle(Paint.Style.FILL); c.drawCircle(9,7,3,p); c.drawCircle(15,17,3,p); break;
             case "refresh": c.drawArc(4,4,20,20,35,280,false,p); path.moveTo(19,3); path.lineTo(20,9); path.lineTo(14,8); c.drawPath(path,p); break;

@@ -4,11 +4,12 @@ import { createHash, randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
-import { Article, Settings } from './types';
+import { Article, AudioChapter, Settings } from './types';
 import { articleDir, patchArticle, settings } from './db';
 import { createLimiter, mapConcurrent } from './concurrency';
 import { languagePrompt, parseDetectedLanguage, voiceForLanguage } from './language';
 import { normalizeArticleText } from './text';
+import { chapterPrompt, chapterSections, chapterMetadata } from './chapters';
 const exec = promisify(execFile);
 // Global within the single worker process, not multiplied by active articles.
 const llmSlot = createLimiter(() => settings().llmConcurrency);
@@ -95,8 +96,14 @@ export async function detectLanguage(s: Settings, original: string, signal?: Abo
   const sample=text.length<=6000?text:[text.slice(0,2000),text.slice(Math.floor(text.length/2)-1000,Math.floor(text.length/2)+1000),text.slice(-2000)].join('\n\n[...]\n\n');
   return parseDetectedLanguage(await llmSlot(()=>prepareText({...s,prompt:languagePrompt},sample,signal),signal));
 }
+async function audioDuration(file: string, signal?: AbortSignal) {
+  const {stdout} = await exec('ffprobe', ['-v','error','-show_entries','format=duration','-of','default=noprint_wrappers=1:nokey=1',file], {timeout:30000, signal});
+  const duration = Number(stdout.trim());
+  if (!Number.isFinite(duration) || duration <= 0) throw new Error('The generated audio has no valid duration.');
+  return duration;
+}
 export async function processArticle(article: Article, signal?: AbortSignal) {
-  const update = (patch: Partial<Omit<Article, 'id'>>) => {
+  const update = (patch: Partial<Omit<Article, 'id' | 'chapters'>>) => {
     signal?.throwIfAborted();
     return patchArticle(article.id, patch, true);
   };
@@ -110,23 +117,25 @@ export async function processArticle(article: Article, signal?: AbortSignal) {
     update({language});
   }
   s.voice=article.voice||voiceForLanguage(language,s.languageVoices,s.voice);
-  const recipe = {llmUrl: s.llmUrl, llmModel: s.llmModel, prompt: s.prompt, ttsProvider: s.ttsProvider, ttsUrl: s.ttsUrl, ttsModel: s.ttsModel, voice: s.voice, language};
+  const textSettings = {...s, prompt: `${s.prompt}\n\n${chapterPrompt}`};
+  const recipe = {llmUrl: s.llmUrl, llmModel: s.llmModel, prompt: textSettings.prompt, ttsProvider: s.ttsProvider, ttsUrl: s.ttsUrl, ttsModel: s.ttsModel, voice: s.voice, language};
   update({recipe: JSON.stringify(recipe)});
   let script = article.script;
   if (!script) {
-    const parts = splitText(article.original, s.llmChunkChars, s.llmConcurrency);
+    const sections = chapterSections(article.original);
+    const parts = sections.flatMap(section => splitText(section.text, s.llmChunkChars, Math.ceil(s.llmConcurrency / sections.length)));
     const pending = new Map<string, Promise<string>>();
     let completed = 0;
     update({progress: `Listening version · 0 of ${parts.length} sections complete`});
     const result = await mapConcurrent(parts, 32, async part => {
       signal?.throwIfAborted();
-      const hash = createHash('sha256').update(JSON.stringify([s.llmUrl,s.llmModel,s.prompt,part])).digest('hex');
+      const hash = createHash('sha256').update(JSON.stringify([s.llmUrl,s.llmModel,textSettings.prompt,part])).digest('hex');
       let job = pending.get(hash);
       if (!job) {
         job = (async () => {
           const file = join(dir, `text-${hash}.txt`);
           if (existsSync(file)) return readFileSync(file, 'utf8');
-          const text = await llmSlot(() => prepareText(s, part, signal), signal);
+          const text = await llmSlot(() => prepareText(textSettings, part, signal), signal);
           signal?.throwIfAborted();
           writeFileSync(file, text, {mode: 0o600});
           return text;
@@ -141,39 +150,60 @@ export async function processArticle(article: Article, signal?: AbortSignal) {
     update({script});
   }
   update({status: 'speaking'});
-  const parts = splitSpeech(script, settings().ttsConcurrency);
-  const pendingAudio = new Map<string, Promise<string>>();
+  const sections = chapterSections(script);
+  const hasChapters = sections.some(section => section.title !== undefined);
+  const concurrency = settings().ttsConcurrency;
+  const parts = sections.flatMap(section => {
+    // Read the heading, never its navigation prefix.
+    const text = section.text.replace(/^#{1,6}[\t ]+(.+?)(?:[\t ]+#+)?[\t ]*\r?$/gm, '$1');
+    return splitSpeech(text, Math.ceil(concurrency / sections.length)).map((text, index) => ({
+      text, chapter: hasChapters && index === 0 ? section.title || article.title : undefined,
+    }));
+  });
+  if (!parts.length) throw new Error('The listening version contains no text to speak.');
+  const pendingAudio = new Map<string, Promise<{filename: string; duration: number}>>();
   let completedAudio = 0;
   update({progress: `Audio · 0 of ${parts.length} sections complete`});
   const files = await mapConcurrent(parts, 32, async part => {
     signal?.throwIfAborted();
-    const hash = createHash('sha256').update(JSON.stringify([s.ttsProvider,s.ttsUrl,s.ttsModel,s.voice,part])).digest('hex');
+    const hash = createHash('sha256').update(JSON.stringify([s.ttsProvider,s.ttsUrl,s.ttsModel,s.voice,part.text])).digest('hex');
     let job = pendingAudio.get(hash);
     if (!job) {
       job = (async () => {
         const filename = `audio-${hash}.mp3`; const file = join(dir, filename);
         if (!existsSync(file)) {
           await ttsSlot(async () => {
-            const response = await speech(s, part, signal);
+            const response = await speech(s, part.text, signal);
             const bytes = Buffer.from(await response.arrayBuffer());
             signal?.throwIfAborted();
             if (!bytes.length) throw new Error('The TTS model returned no audio.');
             writeFileSync(file+'.tmp', bytes, {mode: 0o600}); renameSync(file+'.tmp', file);
           }, signal);
         }
-        return filename;
+        return {filename, duration: hasChapters ? await audioDuration(file, signal) : 0};
       })();
       pendingAudio.set(hash, job);
     }
-    const filename = await job;
+    const file = await job;
     update({progress: `Audio · ${++completedAudio} of ${parts.length} sections complete`});
-    return filename;
+    return file;
   });
   update({progress: 'Combining audio file'});
-  writeFileSync(join(dir,'concat.txt'), files.map(f => `file '${f}'`).join('\n'));
-  await exec('ffmpeg', ['-y','-v','error','-f','concat','-safe','1','-i',join(dir,'concat.txt'),'-codec:a','libmp3lame','-b:a','128k',join(dir,'episode.tmp.mp3')], {timeout: 300000, signal});
-  const {stdout} = await exec('ffprobe', ['-v','error','-show_entries','format=duration','-of','default=noprint_wrappers=1:nokey=1',join(dir,'episode.tmp.mp3')], {timeout: 30000, signal});
+  writeFileSync(join(dir,'concat.txt'), files.map(f => `file '${f.filename}'`).join('\n'));
+  const chapters: AudioChapter[] = [];
+  let elapsed = 0;
+  files.forEach((file, index) => {
+    if (parts[index].chapter) chapters.push({title: parts[index].chapter!, startTime: elapsed});
+    elapsed += file.duration;
+  });
+  const metadata: string[] = [];
+  if (chapters.length) {
+    writeFileSync(join(dir,'chapters.ffmeta'), chapterMetadata(chapters, elapsed), {mode:0o600});
+    metadata.push('-f','ffmetadata','-i',join(dir,'chapters.ffmeta'),'-map_metadata','1','-map_chapters','1');
+  }
+  await exec('ffmpeg', ['-y','-v','error','-f','concat','-safe','1','-i',join(dir,'concat.txt'),...metadata,'-codec:a','libmp3lame','-b:a','128k',join(dir,'episode.tmp.mp3')], {timeout: 300000, signal});
+  const duration = await audioDuration(join(dir,'episode.tmp.mp3'), signal);
   signal?.throwIfAborted();
   renameSync(join(dir,'episode.tmp.mp3'), join(dir,'episode.mp3'));
-  update({status:'ready',audioId:randomUUID(),progress:'In the podcast feed',error:'',publishedAt:new Date().toISOString(), duration: Number(stdout.trim()) || 0, audioBytes: statSync(join(dir,'episode.mp3')).size});
+  update({status:'ready',audioId:randomUUID(),progress:'In the podcast feed',error:'',publishedAt:new Date().toISOString(), duration, audioBytes: statSync(join(dir,'episode.mp3')).size, recipe:JSON.stringify({...recipe,chapters})});
 }
