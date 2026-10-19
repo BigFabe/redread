@@ -119,7 +119,7 @@ public final class PlaybackService extends Service {
                     }
                 }
                 if (pendingLoad != null) {
-                    Intent next = pendingLoad; pendingLoad = null; onStartCommand(next, 0, 0); return;
+                    Intent queued = pendingLoad; pendingLoad = null; onStartCommand(queued, 0, 0); return;
                 }
                 if (pendingStop) { pendingStop = false; stopPlayback(); return; }
                 update();
