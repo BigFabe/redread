@@ -41,7 +41,11 @@ npm run extension:build  # also requires the zip command
 
 ## Android app
 
-Import articles through Android's share menu and listen to episodes with background playback, lock-screen controls, and saved playback progress. Setup and APK build instructions: [apps/android/README.md](apps/android/README.md).
+Import articles through Android's share menu and listen to episodes with background playback, lock-screen controls, and playback progress shared with the web player. Setup and APK build instructions: [apps/android/README.md](apps/android/README.md).
+
+Progress belongs to a specific audio generation, including archived versions. Both players checkpoint locally every five seconds while playing and sync approximately every ten seconds, with immediate attempts on pause, completed seeks, and episode completion. Pending updates survive restarts and retry after connection failures; a closed app resumes retries when opened again. Conflicting device updates are not silently merged: choose the server position or explicitly continue locally. Completion is stored separately from position; replaying clears completion. Old unversioned Android positions are not automatically transferred to newly identified audio.
+
+The server stores positions and idempotent update receipts in SQLite. Playback writes require the persistent server identity and the last known revision; delayed updates cannot overwrite a newer revision. This is conflict protection, not authentication: Tailnet-only access is still required.
 
 ```sh
 ./apps/android/build.sh
@@ -81,7 +85,7 @@ Configure these persistently in Settings without a restart, or use `.env` as the
 
 Article and API limits are applied when scheduling more work without cancelling calls already in progress. Models, prompt, voice, and chunk length are captured when an article starts. Text and audio are assembled in their original order despite different response times. Identical chunks share in-flight calls. After an error, no additional chunks are started; already scheduled calls are allowed to finish and successful results are saved. Only then is the article released for retrying or deletion. Continue to run only **one worker process**. Values that are too high can trigger provider limits; reduce concurrency after HTTP 429 responses. Short articles and listening versions are also split according to LLM or TTS concurrency, preferably at sentence boundaries and, if needed, at word boundaries. LLM chunks stay below `LLM_CHUNK_CHARS`, while audio chunks stay below 3,000 characters. Unsplittable single words and identical chunks can result in fewer calls. Both limits remain global across all articles. Changing concurrency can produce different chunks and new model calls on retries.
 
-For other working directories, `REDREAD_ENV_FILE` can specify an absolute path. An empty value disables automatic loading for tests. Compose passes `.env` to both containers; recreate the containers after changes.
+For other working directories, `REDREAD_ENV_FILE` can specify an absolute path. An empty value disables automatic loading. Compose passes `.env` to both containers; recreate the containers after changes.
 
 ## Monorepo
 
@@ -91,7 +95,6 @@ apps/worker/       Persistent processing, LLM → TTS → FFmpeg
 apps/extension/    Shared Chrome/Firefox extension
 apps/android/      Native Android app: sharing, library, audio player
 packages/core/     SQLite, extraction, processing, shared types
-tests/             API, pipeline, and browser tests
 ```
 
 TypeScript and npm workspaces. This prototype uses SQLite directly through `node:sqlite`, without an ORM or Redis. It uses custom CSS and Lucide icons, with no code copied from Karakeep. Font files are served locally.
@@ -113,12 +116,7 @@ The default data directory for these workspace commands is `./data` in the repos
 npm run build
 npm start
 npm run typecheck
-npm test          # requires npm run build first; isolated data and mock models
-# Against the running web app; creates and removes one test article:
-CHROMIUM_PATH=/usr/bin/chromium TEST_URL=http://127.0.0.1:3210 node tests/browser.mjs
 ```
-
-The browser check preserves existing settings and disables automatic audio generation for its test article.
 
 ## Restart the Tailscale prototype
 

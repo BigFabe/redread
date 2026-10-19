@@ -9,9 +9,19 @@ export function createLimiter(limit: number | (() => number)) {
       waiting.shift()!();
     }
   }
-  return async function run<T>(task: () => Promise<T>): Promise<T> {
-    await new Promise<void>(resolve => { waiting.push(resolve); pump(); });
-    try { return await task(); }
+  return async function run<T>(task: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    signal?.throwIfAborted();
+    await new Promise<void>((resolve, reject) => {
+      const start = () => { signal?.removeEventListener('abort', abort); resolve(); };
+      const abort = () => {
+        const index = waiting.indexOf(start);
+        if (index !== -1) waiting.splice(index, 1);
+        reject(signal!.reason);
+      };
+      signal?.addEventListener('abort', abort, {once: true});
+      waiting.push(start); pump();
+    });
+    try { signal?.throwIfAborted(); return await task(); }
     finally { active--; pump(); }
   };
 }

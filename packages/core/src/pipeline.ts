@@ -1,8 +1,9 @@
 import { existsSync, readFileSync, writeFileSync, renameSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { setTimeout as delay } from 'node:timers/promises';
 import { Article, Settings } from './types';
 import { articleDir, patchArticle, settings } from './db';
 import { createLimiter, mapConcurrent } from './concurrency';
@@ -50,9 +51,9 @@ export function splitSpeech(text: string, concurrency: number): string[] {
   // when the whole script is under 3000 characters.
   return splitText(text, 3000, concurrency);
 }
-async function provider(url: string, path: string, key: string, body: object, headers: Record<string,string> = {}) {
+async function provider(url: string, path: string, key: string, body: object, headers: Record<string,string> = {}, signal?: AbortSignal) {
   const response = await fetch(path ? `${url.replace(/\/$/, '')}/${path}` : url, {
-    method: 'POST', redirect: 'error', signal: AbortSignal.timeout(180000),
+    method: 'POST', redirect: 'error', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(180000)]) : AbortSignal.timeout(180000),
     headers: {'Content-Type': 'application/json', ...(key ? {Authorization: `Bearer ${key}`} : {}), ...headers},
     body: JSON.stringify(body),
   });
@@ -62,9 +63,9 @@ async function provider(url: string, path: string, key: string, body: object, he
   }
   return response;
 }
-export async function prepareText(s: Settings, input: string) {
+export async function prepareText(s: Settings, input: string, signal?: AbortSignal) {
   for (let attempt = 0; attempt < 2; attempt++) {
-    const response = await provider(s.llmUrl, 'chat/completions', s.llmKey, {model: s.llmModel, messages: [{role:'system',content:s.prompt},{role:'user',content:input}]});
+    const response = await provider(s.llmUrl, 'chat/completions', s.llmKey, {model: s.llmModel, messages: [{role:'system',content:s.prompt},{role:'user',content:input}]}, {}, signal);
     const json = await response.json();
     const choice = json.choices?.[0];
     const error = json.error || choice?.error;
@@ -76,68 +77,76 @@ export async function prepareText(s: Settings, input: string) {
     if (choice?.message?.refusal || choice?.finish_reason === 'content_filter') throw new Error('The LLM refused to process the article (content filter).');
     const text = choice?.message?.content;
     if (typeof text === 'string' && text.trim()) return text.trim();
-    if (attempt === 0) { await new Promise(resolve => setTimeout(resolve, 750)); continue; }
+    if (attempt === 0) { await delay(750, undefined, {signal}); continue; }
     const reasoning = Number(json.usage?.completion_tokens_details?.reasoning_tokens);
     const detail = Number.isFinite(reasoning) && reasoning > 0 ? ` It used ${reasoning} reasoning tokens but returned no listening version.` : '';
     throw new Error(`The LLM returned no text on the second attempt either.${detail} Please try again or switch models.`);
   }
   throw new Error('No LLM output.');
 }
-export function speech(s: Settings, text: string) {
+export function speech(s: Settings, text: string, signal?: AbortSignal) {
   if (s.ttsProvider === 'fish') {
-    return provider(s.ttsUrl, '', s.ttsKey, {text, format: 'mp3', ...(s.voice ? {reference_id: s.voice} : {})}, {model: s.ttsModel});
+    return provider(s.ttsUrl, '', s.ttsKey, {text, format: 'mp3', ...(s.voice ? {reference_id: s.voice} : {})}, {model: s.ttsModel}, signal);
   }
-  return provider(s.ttsUrl, 'audio/speech', s.ttsKey, {model: s.ttsModel, voice: s.voice, input: text, response_format: 'mp3'});
+  return provider(s.ttsUrl, 'audio/speech', s.ttsKey, {model: s.ttsModel, voice: s.voice, input: text, response_format: 'mp3'}, {}, signal);
 }
-export async function detectLanguage(s: Settings, original: string): Promise<string> {
+export async function detectLanguage(s: Settings, original: string, signal?: AbortSignal): Promise<string> {
   const text=normalizeArticleText(original);
   const sample=text.length<=6000?text:[text.slice(0,2000),text.slice(Math.floor(text.length/2)-1000,Math.floor(text.length/2)+1000),text.slice(-2000)].join('\n\n[...]\n\n');
-  return parseDetectedLanguage(await llmSlot(()=>prepareText({...s,prompt:languagePrompt},sample)));
+  return parseDetectedLanguage(await llmSlot(()=>prepareText({...s,prompt:languagePrompt},sample,signal),signal));
 }
-export async function processArticle(article: Article) {
+export async function processArticle(article: Article, signal?: AbortSignal) {
+  const update = (patch: Partial<Omit<Article, 'id'>>) => {
+    signal?.throwIfAborted();
+    return patchArticle(article.id, patch, true);
+  };
+  signal?.throwIfAborted();
   const s = settings();
   const dir = articleDir(article.id);
   let language=article.language;
   if (!language) {
-    patchArticle(article.id,{progress:'Detecting language'});
-    language=await detectLanguage(s,article.original);
-    patchArticle(article.id,{language});
+    update({progress:'Detecting language'});
+    language=await detectLanguage(s,article.original,signal);
+    update({language});
   }
   s.voice=article.voice||voiceForLanguage(language,s.languageVoices,s.voice);
   const recipe = {llmUrl: s.llmUrl, llmModel: s.llmModel, prompt: s.prompt, ttsProvider: s.ttsProvider, ttsUrl: s.ttsUrl, ttsModel: s.ttsModel, voice: s.voice, language};
-  patchArticle(article.id, {recipe: JSON.stringify(recipe)});
+  update({recipe: JSON.stringify(recipe)});
   let script = article.script;
   if (!script) {
     const parts = splitText(article.original, s.llmChunkChars, s.llmConcurrency);
     const pending = new Map<string, Promise<string>>();
     let completed = 0;
-    patchArticle(article.id, {progress: `Listening version · 0 of ${parts.length} sections complete`});
+    update({progress: `Listening version · 0 of ${parts.length} sections complete`});
     const result = await mapConcurrent(parts, 32, async part => {
+      signal?.throwIfAborted();
       const hash = createHash('sha256').update(JSON.stringify([s.llmUrl,s.llmModel,s.prompt,part])).digest('hex');
       let job = pending.get(hash);
       if (!job) {
         job = (async () => {
           const file = join(dir, `text-${hash}.txt`);
           if (existsSync(file)) return readFileSync(file, 'utf8');
-          const text = await llmSlot(() => prepareText(s, part));
+          const text = await llmSlot(() => prepareText(s, part, signal), signal);
+          signal?.throwIfAborted();
           writeFileSync(file, text, {mode: 0o600});
           return text;
         })();
         pending.set(hash, job);
       }
       const text = await job;
-      patchArticle(article.id, {progress: `Listening version · ${++completed} of ${parts.length} sections complete`});
+      update({progress: `Listening version · ${++completed} of ${parts.length} sections complete`});
       return text;
     });
     script = result.join('\n\n');
-    patchArticle(article.id, {script});
+    update({script});
   }
-  patchArticle(article.id, {status: 'speaking'});
+  update({status: 'speaking'});
   const parts = splitSpeech(script, settings().ttsConcurrency);
   const pendingAudio = new Map<string, Promise<string>>();
   let completedAudio = 0;
-  patchArticle(article.id, {progress: `Audio · 0 of ${parts.length} sections complete`});
+  update({progress: `Audio · 0 of ${parts.length} sections complete`});
   const files = await mapConcurrent(parts, 32, async part => {
+    signal?.throwIfAborted();
     const hash = createHash('sha256').update(JSON.stringify([s.ttsProvider,s.ttsUrl,s.ttsModel,s.voice,part])).digest('hex');
     let job = pendingAudio.get(hash);
     if (!job) {
@@ -145,24 +154,26 @@ export async function processArticle(article: Article) {
         const filename = `audio-${hash}.mp3`; const file = join(dir, filename);
         if (!existsSync(file)) {
           await ttsSlot(async () => {
-            const response = await speech(s, part);
+            const response = await speech(s, part, signal);
             const bytes = Buffer.from(await response.arrayBuffer());
+            signal?.throwIfAborted();
             if (!bytes.length) throw new Error('The TTS model returned no audio.');
             writeFileSync(file+'.tmp', bytes, {mode: 0o600}); renameSync(file+'.tmp', file);
-          });
+          }, signal);
         }
         return filename;
       })();
       pendingAudio.set(hash, job);
     }
     const filename = await job;
-    patchArticle(article.id, {progress: `Audio · ${++completedAudio} of ${parts.length} sections complete`});
+    update({progress: `Audio · ${++completedAudio} of ${parts.length} sections complete`});
     return filename;
   });
-  patchArticle(article.id, {progress: 'Combining audio file'});
+  update({progress: 'Combining audio file'});
   writeFileSync(join(dir,'concat.txt'), files.map(f => `file '${f}'`).join('\n'));
-  await exec('ffmpeg', ['-y','-v','error','-f','concat','-safe','1','-i',join(dir,'concat.txt'),'-codec:a','libmp3lame','-b:a','128k',join(dir,'episode.tmp.mp3')], {timeout: 300000});
-  const {stdout} = await exec('ffprobe', ['-v','error','-show_entries','format=duration','-of','default=noprint_wrappers=1:nokey=1',join(dir,'episode.tmp.mp3')]);
+  await exec('ffmpeg', ['-y','-v','error','-f','concat','-safe','1','-i',join(dir,'concat.txt'),'-codec:a','libmp3lame','-b:a','128k',join(dir,'episode.tmp.mp3')], {timeout: 300000, signal});
+  const {stdout} = await exec('ffprobe', ['-v','error','-show_entries','format=duration','-of','default=noprint_wrappers=1:nokey=1',join(dir,'episode.tmp.mp3')], {timeout: 30000, signal});
+  signal?.throwIfAborted();
   renameSync(join(dir,'episode.tmp.mp3'), join(dir,'episode.mp3'));
-  patchArticle(article.id, {status:'ready',progress:'In the podcast feed',error:'',publishedAt:new Date().toISOString(), duration: Number(stdout.trim()) || 0, audioBytes: statSync(join(dir,'episode.mp3')).size});
+  update({status:'ready',audioId:randomUUID(),progress:'In the podcast feed',error:'',publishedAt:new Date().toISOString(), duration: Number(stdout.trim()) || 0, audioBytes: statSync(join(dir,'episode.mp3')).size});
 }

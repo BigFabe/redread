@@ -3,11 +3,8 @@
 import { useEffect, useId, useRef, useState, type CSSProperties, type RefObject } from 'react';
 import { AudioLines, Download, LoaderCircle, Pause, Play, Volume2, VolumeX, X } from 'lucide-react';
 import type { PlayableArticle } from '@redread/core/types';
-
-const timestamp = (seconds: number) => {
-  const value = Math.max(0, Math.floor(seconds || 0));
-  return `${Math.floor(value / 60)}:${String(value % 60).padStart(2, '0')}`;
-};
+import { timestamp } from '@redread/core/duration';
+import { usePlaybackProgress } from './use-playback-progress';
 
 function SkipIcon({forward=false}:{forward?:boolean}) {
   return <svg width="28" height="28" viewBox="0 0 24 24" aria-hidden="true">
@@ -18,17 +15,19 @@ function SkipIcon({forward=false}:{forward?:boolean}) {
   </svg>;
 }
 
-export default function AudioPlayer({ article, onClose, onOpen, audioRef, onPausedChange }: {
+export default function AudioPlayer({ article, onClose, onOpen, audioRef, playRef, onPausedChange, rate, onRateChange }: {
   article: PlayableArticle; onClose: () => void; onOpen: () => void;
-  audioRef: RefObject<HTMLAudioElement|null>; onPausedChange: (paused: boolean) => void;
+  audioRef: RefObject<HTMLAudioElement|null>; playRef: RefObject<(()=>void)|null>; onPausedChange: (paused: boolean) => void;
+  rate: number; onRateChange: (rate: number) => void;
 }) {
   const audio = audioRef;
-  const audioUrl = `/api/articles/${article.id}/audio?${article.versionId?`version=${encodeURIComponent(article.versionId)}`:`v=${encodeURIComponent(article.publishedAt)}`}`;
+  const audioId = article.audioId || article.versionId || '';
+  const audioUrl = `/api/articles/${article.id}/audio?version=${encodeURIComponent(audioId)}`;
+  const progress = usePlaybackProgress(article.id,audioId,audio);
   const [paused, setPaused] = useState(true);
   const [waiting, setWaiting] = useState(false);
   const [position, setPosition] = useState(0);
   const [duration, setDuration] = useState(article.duration || 0);
-  const [rate, setRate] = useState(1);
   const [rateOpen, setRateOpen] = useState(false);
   const rateControl = useRef<HTMLDivElement>(null);
   const rateButton = useRef<HTMLButtonElement>(null);
@@ -36,11 +35,8 @@ export default function AudioPlayer({ article, onClose, onOpen, audioRef, onPaus
   const [muted, setMuted] = useState(false);
   const [error, setError] = useState('');
 
-  async function play() {
-    try { await audio.current?.play(); }
-    catch { setPaused(true); setWaiting(false); }
-  }
-  useEffect(() => { void play(); }, []);
+  useEffect(() => { if (audio.current) audio.current.playbackRate = rate; }, [audio, rate]);
+  useEffect(() => { playRef.current=progress.play; return ()=>{playRef.current=null;}; },[playRef,progress.play]);
   useEffect(() => { onPausedChange(paused); }, [paused,onPausedChange]);
   useEffect(() => {
     if (!rateOpen) return;
@@ -57,11 +53,13 @@ export default function AudioPlayer({ article, onClose, onOpen, audioRef, onPaus
 
   function seek(value: number) {
     if (!audio.current || !Number.isFinite(audio.current.duration)) return;
-    audio.current.currentTime = Math.max(0, Math.min(value, audio.current.duration));
-    setPosition(audio.current.currentTime);
+    progress.seek(value);
   }
   function updateDuration() {
-    if (audio.current && Number.isFinite(audio.current.duration)) setDuration(audio.current.duration);
+    if (audio.current) {
+      audio.current.playbackRate = rate;
+      if (Number.isFinite(audio.current.duration)) setDuration(audio.current.duration);
+    }
   }
 
   return <section className="player-bar" aria-label="Audioplayer">
@@ -78,17 +76,19 @@ export default function AudioPlayer({ article, onClose, onOpen, audioRef, onPaus
         <AudioLines size={24}/><span><strong>{article.title}</strong><small>{article.source}{article.versionId&&` · Previous version · ${new Date(article.publishedAt).toLocaleString()}`}</small></span>
       </button>
       <div className="player-transport">
-        <button className="icon-button player-skip" aria-label="Back 15 seconds" onClick={() => seek((audio.current?.currentTime || 0) - 15)}><SkipIcon/></button>
-        <button className="player-toggle" aria-label={paused?'Abspielen':'Pausieren'} onClick={() => { if (paused) void play(); else audio.current?.pause(); }} disabled={!!error}>
-          {waiting&&!paused?<LoaderCircle size={21} className="spin"/>:paused?<Play size={21} fill="currentColor"/>:<Pause size={21} fill="currentColor"/>}
+        <button className="icon-button player-skip" aria-label="Back 15 seconds" disabled={progress.starting} onClick={() => seek((audio.current?.currentTime || 0) - 15)}><SkipIcon/></button>
+        <button className="player-toggle" aria-label={progress.resolving?'Hörposition wird abgeglichen':progress.starting?'Start abbrechen':paused?'Abspielen':'Pausieren'} onClick={() => { if (progress.starting||!paused) progress.pause(); else progress.play(); }} disabled={!!error||progress.resolving}>
+          {progress.starting||waiting&&!paused?<LoaderCircle size={21} className="spin"/>:paused?<Play size={21} fill="currentColor"/>:<Pause size={21} fill="currentColor"/>}
         </button>
-        <button className="icon-button player-skip" aria-label="15 Sekunden vor" onClick={() => seek((audio.current?.currentTime || 0) + 15)}><SkipIcon forward/></button>
+        <button className="icon-button player-skip" aria-label="15 Sekunden vor" disabled={progress.starting} onClick={() => seek((audio.current?.currentTime || 0) + 15)}><SkipIcon forward/></button>
       </div>
       <div className="player-options">
         <div className="player-rate-control" ref={rateControl}>
           <button ref={rateButton} className="player-rate" aria-label={`Wiedergabetempo: ${rate.toLocaleString('de-DE')}×`} aria-expanded={rateOpen} aria-controls={rateId} onClick={() => setRateOpen(!rateOpen)}>{rate.toLocaleString('de-DE')}×</button>
           {rateOpen&&<div id={rateId} className="player-rate-menu" role="group" aria-label="Choose playback speed">
-            {[0.75,1,1.25,1.5,1.75,2].map(value => <button key={value} aria-pressed={rate===value} onClick={() => { setRate(value); if(audio.current) audio.current.playbackRate=value; setRateOpen(false); rateButton.current?.focus(); }}>{value.toLocaleString('de-DE')}×</button>)}
+            <label htmlFor={`${rateId}-slider`}>Wiedergabetempo <output>{rate.toLocaleString('de-DE')}×</output></label>
+            <input id={`${rateId}-slider`} type="range" min={0.5} max={3} step={0.05} value={rate} aria-label="Wiedergabetempo" aria-valuetext={`${rate.toLocaleString('de-DE')}×`} onChange={e => onRateChange(Number(e.target.value))}/>
+            <div className="player-rate-limits"><span>0,5×</span><span>3×</span></div>
           </div>}
         </div>
         <button className="icon-button player-mute" aria-label={muted?'Ton einschalten':'Stummschalten'} onClick={() => { if(audio.current) audio.current.muted=!muted; setMuted(!muted); }}>{muted?<VolumeX size={19}/>:<Volume2 size={19}/>}</button>
@@ -96,7 +96,8 @@ export default function AudioPlayer({ article, onClose, onOpen, audioRef, onPaus
         <button className="icon-button" aria-label="Close player" onClick={onClose}><X size={19}/></button>
       </div>
     </div>
-    <div className="player-timeline"><time>{timestamp(position)}</time><input type="range" min={0} max={duration || 1} step={0.1} value={Math.min(position,duration || 1)} disabled={!duration||!!error} aria-label="Wiedergabeposition" aria-valuetext={`${timestamp(position)} von ${timestamp(duration)}`} style={{'--progress':`${duration?position/duration*100:0}%`} as CSSProperties} onChange={e => seek(Number(e.target.value))}/><time>{timestamp(duration)}</time></div>
+    <div className="player-timeline"><time>{timestamp(position/rate)}</time><input type="range" min={0} max={duration || 1} step={0.1} value={Math.min(position,duration || 1)} disabled={!duration||!!error||progress.starting} aria-label="Wiedergabeposition" aria-valuetext={`${timestamp(position/rate)} von ${timestamp(duration/rate)}`} style={{'--progress':`${duration?position/duration*100:0}%`} as CSSProperties} onChange={e => seek(Number(e.target.value))}/><time title={`Hördauer bei ${rate.toLocaleString('de-DE')}×`}>{timestamp(duration/rate)}</time></div>
+    <div className="player-sync" role="status"><span>{progress.message}</span>{progress.entry?.conflict&&<div className="player-sync-actions"><button type="button" disabled={progress.starting} onClick={()=>progress.resolve(true)}>Serverstand übernehmen</button><button type="button" disabled={progress.starting} onClick={()=>progress.resolve(false)}>Hier fortsetzen</button></div>}{progress.recoveries?.slice(0,1).map(entry=><div className="player-sync-recovery" key={entry.key}><span>Weitere lokale Position: {timestamp(entry.snapshot.positionMs/1000)}{entry.snapshot.completed?' · abgeschlossen':''}{progress.recoveries!.length>1?` · ${progress.recoveries!.length} gespeichert`:''}</span><div className="player-sync-actions"><button type="button" disabled={progress.starting} onClick={()=>progress.resolve(false,entry.key)}>Diese Position übernehmen</button><button type="button" disabled={progress.starting} onClick={()=>progress.resolve(true,entry.key)}>Serverstand behalten</button></div></div>)}</div>
     {error&&<p className="player-error" role="alert">{error}</p>}
   </section>;
 }

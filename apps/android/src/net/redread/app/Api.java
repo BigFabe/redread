@@ -6,15 +6,28 @@ import java.io.*;
 import java.nio.charset.StandardCharsets;
 
 final class Api {
+    static final class HttpError extends IOException {
+        final int code;
+        final JSONObject body;
+        HttpError(int code, String message, JSONObject body) {
+            super(message); this.code = code; this.body = body;
+        }
+    }
     static String request(String base, String path, JSONObject body) throws Exception {
+        return request(base, path, body == null ? "GET" : "POST", body, null, 12000, 60000);
+    }
+    static String request(String base, String path, String method, JSONObject body,
+                          java.util.Map<String, String> headers, int connectTimeout, int readTimeout) throws Exception {
         HttpURLConnection connection = (HttpURLConnection) new URL(base + path).openConnection();
-        connection.setConnectTimeout(12000);
-        connection.setReadTimeout(60000);
+        connection.setConnectTimeout(connectTimeout);
+        connection.setReadTimeout(readTimeout);
         connection.setInstanceFollowRedirects(false);
         connection.setRequestProperty("Accept", "application/json");
         try {
+            connection.setRequestMethod(method);
+            if (headers != null) for (java.util.Map.Entry<String, String> header : headers.entrySet())
+                connection.setRequestProperty(header.getKey(), header.getValue());
             if (body != null) {
-                connection.setRequestMethod("POST");
                 connection.setDoOutput(true);
                 connection.setRequestProperty("Content-Type", "application/json");
                 try (OutputStream out = connection.getOutputStream()) { out.write(body.toString().getBytes(StandardCharsets.UTF_8)); }
@@ -32,8 +45,9 @@ final class Api {
             String result = bytes.toString("UTF-8");
             if (code < 200 || code >= 300) {
                 String message = "Server error (HTTP " + code + ").";
-                try { message = new JSONObject(result).optString("error", message); } catch (JSONException ignored) {}
-                throw new IOException(message);
+                JSONObject detail = new JSONObject();
+                try { detail = new JSONObject(result); message = detail.optString("error", message); } catch (JSONException ignored) {}
+                throw new HttpError(code, message, detail);
             }
             return result;
         } finally { connection.disconnect(); }

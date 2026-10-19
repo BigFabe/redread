@@ -1,12 +1,19 @@
-export type Status = 'draft' | 'queued' | 'preparing' | 'speaking' | 'ready' | 'failed';
+export type Status = 'draft' | 'queued' | 'preparing' | 'speaking' | 'cancelling' | 'cancelled' | 'ready' | 'failed';
 export interface Article {
   id: string; title: string; url: string; source: string; original: string; script: string;
   status: Status; progress: string; error: string; createdAt: string; publishedAt: string;
-  duration: number; audioBytes: number; recipe: string; language: string; voice: string;
+  duration: number; audioBytes: number; recipe: string; language: string; voice: string; audioId: string;
 }
 export type ReprocessMode = 'audio' | 'all';
-export type AudioVersion = Pick<Article, 'publishedAt' | 'duration' | 'audioBytes' | 'voice'> & {versionId: string};
+export type AudioVersion = Pick<Article, 'publishedAt' | 'duration' | 'audioBytes' | 'voice' | 'audioId'> & {versionId: string};
 export type PlayableArticle = Article & {versionId?: string};
+export interface PlaybackProgress {
+  articleId: string; audioId: string; positionMs: number; completed: boolean;
+  revision: number; mutationId: string; updatedAt: string;
+}
+export interface PlaybackMutation {
+  positionMs: number; completed: boolean; baseRevision: number; mutationId: string;
+}
 export interface Settings {
   theme: 'light' | 'dark' | 'auto';
   llmUrl: string; llmModel: string; llmKey: string; prompt: string;
@@ -17,7 +24,7 @@ export interface Settings {
   articleConcurrency: number; llmConcurrency: number; ttsConcurrency: number; llmChunkChars: number;
 }
 export type PublicSettings = Settings & { hasLlmKey: boolean; hasTtsKey: boolean; envFields: string[]; overriddenFields: string[] };
-export const busy = (status: Status) => ['queued', 'preparing', 'speaking'].includes(status);
+export const busy = (status: Status) => ['queued', 'preparing', 'speaking', 'cancelling'].includes(status);
 export const defaults: Settings = {
   theme: 'light',
   llmUrl: 'https://api.openai.com/v1', llmModel: 'openai/gpt-5.6-luna', llmKey: '',

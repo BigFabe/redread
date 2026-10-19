@@ -2,8 +2,10 @@ services:
   web:
     build: .
     image: redread:local
-    ports:
-      - "127.0.0.1:3210:3210"
+    container_name: redread
+    networks:
+      - default
+      - lsio
     env_file: .env
     environment:
       PUBLIC_URL: ${PUBLIC_URL:-http://localhost:3210}
@@ -20,3 +22,7 @@ services:
     restart: unless-stopped
 volumes:
   redread-data:
+
+networks:
+  lsio:
+    external: true

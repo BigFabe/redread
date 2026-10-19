@@ -1,12 +1,12 @@
 import { z } from 'zod';
-import { createReadStream, statSync } from 'node:fs';
+import { createReadStream, existsSync, statSync, openSync, fstatSync, closeSync } from 'node:fs';
 import { Readable } from 'node:stream';
-import { join } from 'node:path';
-import { addArticle, listArticles, getArticle, publicSettings, settings, saveSettings, resetSettings, queueArticle, patchArticle, deleteArticle, articleDir } from '@redread/core/db';
+import { addArticle, listArticles, getArticle, publicSettings, settings, saveSettings, resetSettings, queueArticle, cancelArticle, patchArticle, deleteArticle } from '@redread/core/db';
 import { busy } from '@redread/core/types';
-import { reprocessArticle, listAudioVersions, getAudioVersion, versionDir } from '@redread/core/db';
+import { reprocessArticle, listAudioVersions, audioAsset, serverId, getPlayback, savePlayback } from '@redread/core/db';
 import { languageVoices } from '@redread/core/language';
 import { customVoices } from '@redread/core/voices';
+import { createVoiceSample, listVoiceSamples, voiceSampleFile } from '@redread/core/voice-samples';
 import { extractArticle } from '@redread/core/extract';
 import { extensionOrigin, extensionImport } from '@redread/core/extension-access';
 export const runtime = 'nodejs';
@@ -47,9 +47,21 @@ async function handleRequest(req: Request, context: Context) {
       if (!req.headers.get('content-type')?.includes('application/json')) return json({error:'JSON is required.'},415);
     }
     if (resource === 'health' && req.method === 'GET') {
-      const s=settings();return json({app:'redread',version:'0.1',ready:!!s.llmModel&&!!s.ttsModel});
+      const s=settings();return json({app:'redread',version:'0.1',serverId,ready:!!s.llmModel&&!!s.ttsModel});
     }
     if (resource === 'voices' && req.method === 'GET') return json(settings().customVoices);
+    if (resource === 'voice-samples' && !action) {
+      if (!id && req.method === 'GET') return json(listVoiceSamples(settings()));
+      if (!id && req.method === 'POST') {
+        const {voice} = z.object({voice:z.string().trim().max(200)}).parse(await req.json());
+        return json({id:await createVoiceSample(settings(), voice)});
+      }
+      if (id && (req.method === 'GET' || req.method === 'HEAD')) {
+        const file = voiceSampleFile(id);
+        if (!existsSync(file)) return json({error:'Create a sample for this voice first.'},404);
+        return new Response(req.method === 'HEAD' ? null : Readable.toWeb(createReadStream(file)) as ReadableStream, {headers:{'Content-Type':'audio/mpeg','Content-Length':String(statSync(file).size),'Cache-Control':'private, max-age=31536000, immutable'}});
+      }
+    }
     if (resource === 'settings' && req.method === 'GET') return json(publicSettings());
     if (resource === 'settings' && req.method === 'DELETE') { resetSettings(); return json(publicSettings()); }
     if (resource === 'settings' && req.method === 'PUT') {
@@ -76,23 +88,47 @@ async function handleRequest(req: Request, context: Context) {
     const article = getArticle(id);
     if (!article) return json({error:'Article not found.'},404);
     if (action === 'versions' && req.method === 'GET') return json(listAudioVersions(id));
+    if (action === 'playback' && path.length === 3 && (req.method === 'GET' || req.method === 'PUT')) {
+      const audioId = z.string().uuid().parse(new URL(req.url).searchParams.get('version'));
+      if (!audioAsset(id,audioId)) return json({error:'Audio is not available.'},404);
+      if (req.method === 'GET') return json(getPlayback(id,audioId));
+      if (req.headers.get('x-redread-server') !== serverId) return json({error:'The server identity changed. Reconnect before syncing.'},412);
+      const input = z.object({
+        positionMs:z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),completed:z.boolean(),
+        baseRevision:z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),mutationId:z.string().uuid(),
+      }).strict().parse(await req.json());
+      const result = savePlayback(id,audioId,input);
+      return result.conflict ? json({error:'Playback changed on another device.',current:result.current},409) : json(result.current);
+    }
     if (action === 'audio' && (req.method === 'GET' || req.method === 'HEAD')) {
       const versionId = new URL(req.url).searchParams.get('version');
-      if (versionId!==null ? !getAudioVersion(id,versionId) : article.status !== 'ready') return json({error:'Audio is not available.'},404);
-      const file = join(versionId!==null?versionDir(id,versionId):articleDir(id),'episode.mp3'); const size = statSync(file).size;
-      const headers: Record<string,string> = {'Content-Type':'audio/mpeg','Accept-Ranges':'bytes','Cache-Control':'private, no-cache','Content-Disposition':`inline; filename="redread-${id}.mp3"`};
-      let start=0,end=size-1; const range=req.headers.get('range');
-      if (range) {
-        const match=/^bytes=(\d*)-(\d*)$/.exec(range);
-        if (!match || (!match[1] && !match[2])) return new Response(null,{status:416,headers:{'Content-Range':`bytes */${size}`}});
-        if (!match[1]) start=Math.max(0,size-Number(match[2]));
-        else {start=Number(match[1]); if(match[2]) end=Math.min(Number(match[2]),size-1);}
-        if(start>end || start>=size) return new Response(null,{status:416,headers:{'Content-Range':`bytes */${size}`}});
-        headers['Content-Range']=`bytes ${start}-${end}/${size}`;
-      }
-      headers['Content-Length']=String(end-start+1);
-      return new Response(req.method === 'HEAD' ? null : Readable.toWeb(createReadStream(file,{start,end})) as ReadableStream, {status:range?206:200,headers});
+      const asset = audioAsset(id,versionId ?? article.audioId);
+      if (!asset) return json({error:'Audio is not available.'},404);
+      // Open before yielding: regeneration can rename the current pathname,
+      // but an already opened descriptor still addresses this exact MP3.
+      const fd = openSync(asset.file,'r');
+      let streaming = false;
+      try {
+        const size = fstatSync(fd).size;
+        const headers: Record<string,string> = {'Content-Type':'audio/mpeg','Accept-Ranges':'bytes','Cache-Control':'private, no-cache','Content-Disposition':`inline; filename="redread-${id}.mp3"`};
+        let start=0,end=size-1; const range=req.headers.get('range');
+        if (range) {
+          const match=/^bytes=(\d*)-(\d*)$/.exec(range);
+          if (!match || (!match[1] && !match[2])) return new Response(null,{status:416,headers:{'Content-Range':`bytes */${size}`}});
+          if (!match[1]) start=Math.max(0,size-Number(match[2]));
+          else {start=Number(match[1]); if(match[2]) end=Math.min(Number(match[2]),size-1);}
+          if(start>end || start>=size) return new Response(null,{status:416,headers:{'Content-Range':`bytes */${size}`}});
+          headers['Content-Range']=`bytes ${start}-${end}/${size}`;
+        }
+        headers['Content-Length']=String(end-start+1);
+        if(req.method==='HEAD')return new Response(null,{status:range?206:200,headers});
+        const stream = createReadStream(asset.file,{fd,start,end,autoClose:true});
+        const response = new Response(Readable.toWeb(stream) as ReadableStream,{status:range?206:200,headers});
+        streaming = true;
+        return response;
+      } finally { if(!streaming)closeSync(fd); }
     }
+    if (action === 'cancel' && req.method === 'POST') return json(cancelArticle(id));
     if ((action === 'process'||action === 'reprocess') && req.method === 'POST') {
       const body=await req.text();
       const {voice,mode}=z.object({voice:z.string().trim().max(200).optional(),mode:z.enum(['audio','all']).default('all')}).parse(body?JSON.parse(body):{});

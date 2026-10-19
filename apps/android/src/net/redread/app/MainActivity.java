@@ -17,8 +17,9 @@ public final class MainActivity extends Activity {
     private final ExecutorService io = Executors.newFixedThreadPool(2);
     private final Handler handler = new Handler();
     private LinearLayout root, list, playerBox;
-    private TextView status, playerTitle, time;
-    private Button speedButton;
+    private TextView status, playerTitle, time, miniSync, fullSync;
+    private Button speedButton, resolveButton;
+    private LinearLayout conflictControls;
     private ImageButton toggle, fullToggle;
     private Typeface bodyFont, headingFont;
     private Dialog playerDialog;
@@ -26,8 +27,11 @@ public final class MainActivity extends Activity {
     private ProgressBar miniProgress;
     private EditText search;
     private SeekBar seek;
+    private PlaybackService seekPlayer;
+    private int seekGeneration;
     private JSONArray articles = new JSONArray();
-    private String base = "", pendingShare = "", pendingTitle = "";
+    private String base = "", serverId = "", pendingShare = "", pendingTitle = "";
+    private int connectionGeneration;
     private boolean loading, seeking;
     private AlertDialog importDialog;
     private long lastRefresh;
@@ -35,7 +39,9 @@ public final class MainActivity extends Activity {
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        ProgressSync.get(this); // Retry all durable outboxes, including earlier episodes/origins.
         base = getSharedPreferences("redread", 0).getString("server", "");
+        serverId = getSharedPreferences("redread", 0).getString("serverId:" + base, "");
         if (state != null) { pendingShare = state.getString("share", ""); pendingTitle = state.getString("shareTitle", ""); }
         else readShare(getIntent());
         bodyFont = Typeface.createFromAsset(getAssets(), "fonts/dm-sans.ttf");
@@ -67,7 +73,7 @@ public final class MainActivity extends Activity {
         b.setBackground(background(Color.TRANSPARENT)); b.setPadding(dp(12), dp(12), dp(12), dp(12));
         b.setLayoutParams(new LinearLayout.LayoutParams(dp(48), dp(48))); b.setOnClickListener(v -> action.run()); return b;
     }
-    private void togglePlayback() { PlaybackService p = PlaybackService.current; if (p != null) { if (p.playing()) p.pause(); else p.play(); updatePlayer(); } }
+    private void togglePlayback() { PlaybackService p = PlaybackService.current; if (p != null) { if (p.playing() || p.playRequested()) p.pause(); else p.play(); updatePlayer(); } }
     private GradientDrawable background(int color) { GradientDrawable d = new GradientDrawable(); d.setColor(color); d.setCornerRadius(dp(14)); return d; }
     private Button button(String label, Runnable action) {
         Button b = new Button(this); b.setText(label); b.setTypeface(bodyFont); b.setBackground(background(Color.TRANSPARENT)); b.setAllCaps(false); b.setTextSize(14); b.setTextColor(RED); b.setMinHeight(dp(48)); b.setMinimumWidth(0); b.setOnClickListener(v -> action.run()); return b;
@@ -105,6 +111,8 @@ public final class MainActivity extends Activity {
         mini.addView(playerTitle, new LinearLayout.LayoutParams(0, dp(56), 1)); playerTitle.setOnClickListener(v -> showPlayer()); playerTitle.setContentDescription("Open player");
         toggle = icon("play", "Play", this::togglePlayback); mini.addView(toggle); mini.addView(icon("down", "Open player", this::showPlayer)); playerBox.addView(mini);
         miniProgress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal); miniProgress.setProgressTintList(android.content.res.ColorStateList.valueOf(RED)); playerBox.addView(miniProgress, new LinearLayout.LayoutParams(-1, dp(2)));
+        miniSync = text("", 12, MUTED); playerBox.addView(miniSync);
+        resolveButton = button("Resolve progress conflict", this::showPlayer); resolveButton.setVisibility(View.GONE); playerBox.addView(resolveButton);
         root.addView(playerBox);
     }
     private void showPlayer() {
@@ -118,10 +126,23 @@ public final class MainActivity extends Activity {
         seek = new SeekBar(this); seek.setProgressTintList(android.content.res.ColorStateList.valueOf(RED)); seek.setThumbTintList(android.content.res.ColorStateList.valueOf(RED)); seek.setContentDescription("Playback position"); panel.addView(seek);
         seek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             public void onProgressChanged(SeekBar bar,int value,boolean user) {}
-            public void onStartTrackingTouch(SeekBar bar) { seeking = true; }
-            public void onStopTrackingTouch(SeekBar bar) { PlaybackService p = PlaybackService.current; if (p != null) p.seek(bar.getProgress()); seeking = false; }
+            public void onStartTrackingTouch(SeekBar bar) {
+                seeking = true; seekPlayer = PlaybackService.current;
+                seekGeneration = seekPlayer == null ? -1 : seekPlayer.identityGeneration();
+            }
+            public void onStopTrackingTouch(SeekBar bar) {
+                PlaybackService p = PlaybackService.current;
+                if (p != null && p == seekPlayer && p.identityGeneration() == seekGeneration) p.seek(bar.getProgress());
+                seeking = false; seekPlayer = null;
+            }
         });
         time = text("", 12, MUTED); panel.addView(time);
+        fullSync = text("", 13, MUTED); panel.addView(fullSync);
+        conflictControls = column();
+        conflictControls.addView(text("Another device saved a different position. Your local position is kept until you choose.", 13, MUTED));
+        conflictControls.addView(button("Use server position", () -> { if (PlaybackService.current != null) PlaybackService.current.resolveConflict(false); }));
+        conflictControls.addView(button("Continue here", () -> { if (PlaybackService.current != null) PlaybackService.current.resolveConflict(true); }));
+        panel.addView(conflictControls);
         LinearLayout controls = row(); controls.addView(button("−15 s", () -> { if (PlaybackService.current != null) PlaybackService.current.seek(PlaybackService.current.position()-15000); }), new LinearLayout.LayoutParams(0, dp(48), 1));
         fullToggle = icon("play", "Play", this::togglePlayback); controls.addView(fullToggle, new LinearLayout.LayoutParams(0, dp(48), 1));
         controls.addView(button("+30 s", () -> { if (PlaybackService.current != null) PlaybackService.current.seek(PlaybackService.current.position()+30000); }), new LinearLayout.LayoutParams(0, dp(48), 1));
@@ -139,17 +160,53 @@ public final class MainActivity extends Activity {
             final String url; try { url = ShareInput.server(address.getText().toString()); } catch (Exception e) { feedback.setText("Please enter a valid HTTP(S) server address without a path."); return; }
             dialog.getButton(-1).setEnabled(false); feedback.setText("Checking connection…");
             io.execute(() -> { try {
-                JSONObject health = new JSONObject(Api.request(url, "/api/health", null)); if (!"redread".equals(health.optString("app"))) throw new Exception("No Redread server is responding at this address.");
-                runOnUiThread(() -> { if (isDestroyed()) return; if (!base.equals(url)) { stopService(new Intent(this, PlaybackService.class)); articles = new JSONArray(); } base = url; getSharedPreferences("redread", 0).edit().putString("server", base).apply(); dialog.dismiss(); refresh(); if (!pendingShare.isEmpty()) showImport(); });
-            } catch (Exception e) { runOnUiThread(() -> { dialog.getButton(-1).setEnabled(true); feedback.setText(connectionError(e)); }); } });
+                JSONObject health = health(url); final String identity = health.getString("serverId");
+                runOnUiThread(() -> {
+                    if (isDestroyed() || !dialog.isShowing()) return;
+                    if (!base.equals(url) || !serverId.equals(identity)) { stopPlayback(); articles = new JSONArray(); }
+                    connectionGeneration++; loading = false; base = url; serverId = identity;
+                    getSharedPreferences("redread", 0).edit().putString("server", base).putString("serverId:" + base, serverId).apply();
+                    renderArticles(); dialog.dismiss(); refresh(); if (!pendingShare.isEmpty()) showImport();
+                });
+            } catch (Exception e) { runOnUiThread(() -> { if (!isDestroyed() && dialog.isShowing()) { dialog.getButton(-1).setEnabled(true); feedback.setText(connectionError(e)); } }); } });
         })); dialog.show();
     }
     private String connectionError(Exception e) { return "Connection failed. Check the server and Tailscale.\n" + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()); }
+    private void stopPlayback() {
+        PlaybackService p = PlaybackService.current;
+        if (p != null) p.stopPlayback();
+    }
+    private JSONObject health(String origin) throws Exception {
+        JSONObject result = new JSONObject(Api.request(origin, "/api/health", "GET", null, null, 1500, 1500));
+        if (!"redread".equals(result.optString("app"))) throw new Exception("No Redread server is responding at this address.");
+        if (!ProgressSync.uuid(result.optString("serverId"))) throw new Exception("Upgrade the Redread server to support versioned playback progress.");
+        return result;
+    }
     private void refresh() {
         if (loading || base.isEmpty()) return; loading = true; lastRefresh = System.currentTimeMillis(); final String server = base;
+        final int request = connectionGeneration;
         status.setText("Loading library…");
-        io.execute(() -> { try { JSONArray result = new JSONArray(Api.request(server, "/api/articles", null)); runOnUiThread(() -> { loading = false; if (isDestroyed() || !server.equals(base)) return; articles = result; status.setText(articles.length() + " articles · connected to Redread"); renderArticles(); }); }
-        catch (Exception e) { runOnUiThread(() -> { loading = false; if (!isDestroyed() && server.equals(base)) status.setText(connectionError(e)); }); } });
+        io.execute(() -> { try {
+            final String identity = health(server).getString("serverId");
+            JSONArray result = new JSONArray(Api.request(server, "/api/articles", null));
+            runOnUiThread(() -> {
+                if (isDestroyed() || !server.equals(base) || request != connectionGeneration) return;
+                loading = false;
+                if (!serverId.isEmpty() && !serverId.equals(identity)) stopPlayback();
+                serverId = identity; getSharedPreferences("redread", 0).edit().putString("serverId:" + server, identity).apply();
+                articles = result; status.setText(articles.length() + " articles · connected to Redread"); renderArticles();
+            });
+        } catch (Exception e) { runOnUiThread(() -> {
+            if (!isDestroyed() && server.equals(base) && request == connectionGeneration) { loading = false; status.setText(connectionError(e)); }
+        }); } });
+    }
+    private void listen(JSONObject article) {
+        if (!ProgressSync.uuid(serverId) || !ProgressSync.uuid(article.optString("audioId"))) {
+            status.setText("Upgrade the Redread server, then refresh. This episode needs a versioned audioId."); return;
+        }
+        startForegroundService(new Intent(this, PlaybackService.class).setAction("load")
+            .putExtra("id", article.optString("id")).putExtra("title", article.optString("title")).putExtra("base", base)
+            .putExtra("serverId", serverId).putExtra("audioId", article.optString("audioId")));
     }
     private void renderArticles() {
         if (list == null) return; list.removeAllViews();
@@ -168,7 +225,7 @@ public final class MainActivity extends Activity {
             TextView meta = text(a.optString("source") + "  ·  " + (ready ? clock((int)(a.optDouble("duration") * 1000)) : label(state)), 11, MUTED);
             TextView name = text(a.optString("title"), 15, INK); bold(name); name.setMaxLines(3); name.setEllipsize(TextUtils.TruncateAt.END); copy.addView(name); copy.addView(meta);
             if (!ready) { String detail = state.equals("failed") ? a.optString("error") : a.optString("progress"); if (!detail.isEmpty()) copy.addView(text(detail, 12, MUTED)); }
-            if (ready) card.addView(icon("play", "Listen to " + a.optString("title"), () -> startForegroundService(new Intent(this, PlaybackService.class).setAction("load").putExtra("id", a.optString("id")).putExtra("title", a.optString("title")).putExtra("base", base))));
+            if (ready) card.addView(icon("play", "Listen to " + a.optString("title"), () -> listen(a)));
             else if (state.equals("draft") || state.equals("failed")) card.addView(icon("refresh", state.equals("failed") ? "Try again" : "Create listening version", () -> process(a)));
             list.addView(card, new LinearLayout.LayoutParams(-1, -2));
             View divider = new View(this); divider.setBackgroundColor(0xffe8e9ee); list.addView(divider, new LinearLayout.LayoutParams(-1, dp(1)));
@@ -219,10 +276,13 @@ public final class MainActivity extends Activity {
     private static String clock(int ms) { int s = ms/1000; return s >= 3600 ? String.format(java.util.Locale.ROOT, "%d:%02d:%02d", s/3600, s/60%60, s%60) : String.format(java.util.Locale.ROOT, "%d:%02d", s/60, s%60); }
     private void updatePlayer() {
         PlaybackService p = PlaybackService.current; playerBox.setVisibility(p == null ? View.GONE : View.VISIBLE); if (p == null) return;
-        playerTitle.setText(p.error.isEmpty() ? p.title : p.error); toggle.setImageDrawable(new Glyph(p.playing() ? "pause" : "play", RED)); toggle.setContentDescription(p.playing() ? "Pause" : "Play");
+        boolean active = p.playing() || p.playRequested();
+        playerTitle.setText(p.error.isEmpty() ? p.title : p.error); toggle.setImageDrawable(new Glyph(active ? "pause" : "play", RED)); toggle.setContentDescription(active ? "Pause" : "Play");
         miniProgress.setMax(p.duration()); miniProgress.setProgress(p.position());
+        miniSync.setText(p.syncStatus); resolveButton.setVisibility(p.hasConflict() ? View.VISIBLE : View.GONE);
         if (playerDialog != null && playerDialog.isShowing()) {
-            fullTitle.setText(p.title); fullToggle.setImageDrawable(new Glyph(p.playing() ? "pause" : "play", RED)); fullToggle.setContentDescription(p.playing() ? "Pause" : "Play"); speedButton.setText(p.speed + "×");
+            fullSync.setText(p.syncStatus); conflictControls.setVisibility(p.hasConflict() ? View.VISIBLE : View.GONE);
+            fullTitle.setText(p.title); fullToggle.setImageDrawable(new Glyph(active ? "pause" : "play", RED)); fullToggle.setContentDescription(active ? "Pause" : "Play"); speedButton.setText(p.speed + "×");
             if (!seeking) { seek.setMax(p.duration()); seek.setProgress(p.position()); }
             time.setText(p.error.isEmpty() ? clock(p.position()) + " / " + clock(p.duration()) : p.error);
         }

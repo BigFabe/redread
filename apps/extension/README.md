@@ -75,18 +75,4 @@ apps/web/public/extensions/           downloads served by the web app
 
 After making changes, rebuild and select **Reload** on the browser's extension page. The extension uses only bundled scripts and fonts. `.env` and other server files are not included in the packages. To serve downloads from the production server, build the extension first and the web app second.
 
-## Tests
-
-```sh
-npm run extension:build
-npm run build
-npm test
-npx playwright install firefox
-npm run test:extension
-```
-
-`test:extension` uses an isolated data directory and real Chromium/Firefox extension APIs. It runs without a worker or external model calls. Firefox is installed temporarily through `web-ext`, while Chromium uses a separate profile directory. Set `CHROMIUM_PATH` or `FIREFOX_PATH` if needed.
-
-Test copies receive automatic host permissions only for local test pages, replacing toolbar clicks and browser permission dialogs in headless mode. **Release packages do not contain these extra permissions or test scripts.** Tests cover rendered DOM content, extraction, background transfer to the real redread API, queue startup, duplicate-click protection, and status persistence. Chromium additionally checks the popup UI, including embedded settings. The standalone `node tests/extension-popup.mjs` test also covers first-time setup, connection failure, logout, and reopening without a web app build.
-
 Firefox lint reports no errors and two `innerHTML` warnings from the bundled Mozilla Readability code. Readability operates on a detached document copy; the extension sends text only and never inserts foreign HTML into its UI.

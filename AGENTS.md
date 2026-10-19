@@ -1,2 +1,3 @@
 - Expose the development server through Tailscale.
 - Keep the configuration options in `.env` and the web app settings synchronized: new or changed options must be available in both places. `.env` is persistent; web app settings are stored persistently in SQLite and override `.env` even after restarts until they are explicitly reset.
+- no tests
