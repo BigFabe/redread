@@ -11,6 +11,7 @@ import CustomVoices, {VoiceSelect} from './custom-voices';
 import type {CustomVoice} from '@redread/core/voices';
 import LanguageVoices, { voiceRowsToSettings } from './language-voices';
 import { normalizeArticleText } from '@redread/core/text';
+import { parseLlmHeaders } from '@redread/core/llm-headers';
 import { type Article, type AudioVersion, type PlayableArticle, type ReprocessMode, type PublicSettings, type Status, busy } from '@redread/core/types';
 
 type CardArticle = Omit<Article,'original'|'script'|'recipe'> & {excerpt:string;wordCount:number;hasScript:boolean};
@@ -207,8 +208,50 @@ function GenerationModal({article,voices,intent,onClose,onComplete}:{article:Art
     </form>
   </Modal>;
 }
+function ApiTestButton({provider,disabled}:{provider:'llm'|'tts';disabled:boolean}) {
+  const [pending,setPending]=useState(false);
+  const [result,setResult]=useState<{ok:boolean;message:string}|null>(null);
+  const [showError,setShowError]=useState(false);
+  async function test() {
+    setShowError(false);
+    setPending(true);
+    setResult(null);
+    try {
+      const {message}=await api<{message:string}>(`settings/${provider}/test`,'POST',{});
+      setResult({ok:true,message});
+    } catch(e) {
+      setResult({ok:false,message:(e as Error).message});
+    } finally {
+      setPending(false);
+    }
+  }
+  const apiName=`${provider.toUpperCase()} API`;
+  const state=pending?'loading':result?result.ok?'passed':'failed':'idle';
+  const label=state==='failed'?`Failed: show ${apiName} error details`:state==='passed'?`Passed: test ${apiName} again`:state==='loading'?`Testing ${apiName}…`:`Test ${apiName}`;
+  return <div className="api-test">
+    <button type="button" className="button secondary api-test-button" data-state={state} aria-label={label} aria-busy={pending}
+      aria-haspopup={state==='failed'?'dialog':undefined} title={state==='failed'?'Show error details':state==='passed'?'Test again':undefined}
+      disabled={pending||(disabled&&state!=='failed')} onClick={()=>state==='failed'?setShowError(true):void test()}>
+      <span data-visible={state==='idle'} aria-hidden="true">Test {apiName}</span>
+      <span data-visible={state==='loading'} aria-hidden="true">Testing…</span>
+      <span data-visible={state==='passed'} aria-hidden="true"><Check size={14}/> Passed</span>
+      <span data-visible={state==='failed'} aria-hidden="true"><AlertCircle size={14}/> Failed</span>
+    </button>
+    <span role="status" className="api-test-status">
+      {pending ? `Testing ${apiName}…` : result ? `${apiName} test ${result.ok?'passed':'failed'}. ${result.message}` : null}
+    </span>
+    {showError&&state==='failed'&&<Modal title={`${apiName} test failed`} onClose={()=>setShowError(false)}>
+      <div className="modal-content">
+        <p className="form-error">{result?.message}</p>
+        <div className="modal-actions"><button type="button" className="button secondary" disabled={disabled} onClick={test}>Test again</button></div>
+      </div>
+    </Modal>}
+  </div>;
+}
 function SettingsForm({initial,onSave}:{initial:PublicSettings;onSave:(s:PublicSettings)=>void}) {
   const [s,setS]=useState(initial);
+  const [headerInput,setHeaderInput]=useState('');
+  const [headerError,setHeaderError]=useState('');
   const [voiceRows,setVoiceRows]=useState(()=>Object.entries(initial.languageVoices||{}).map(([language,voice])=>({language,voice})));
   const [pending,setPending]=useState(false);
   const [showSaved,setShowSaved]=useState(false);
@@ -221,9 +264,15 @@ function SettingsForm({initial,onSave}:{initial:PublicSettings;onSave:(s:PublicS
   const onSaved=useRef(onSave);
   onSaved.current=onSave;
   const dirty=snapshot!==savedSnapshot.current;
-  const sampleRevision=JSON.stringify([s.ttsProvider,s.ttsUrl,s.ttsModel]);
+  const sampleRevision=JSON.stringify([s.ttsProvider,s.ttsUrl,s.ttsModel,...(s.ttsProvider==='fish'?[s.fishNormalize,s.fishTemperature]:[])]);
   const samplesDisabled=dirty||pending||!s.ttsModel;
-  const field=(key:keyof PublicSettings,value:string|number)=>setS(prev=>({...prev,[key]:value}));
+  const field=(key:keyof PublicSettings,value:string|number|boolean)=>setS(prev=>({...prev,[key]:value}));
+  function saveHeaders() {
+    try { parseLlmHeaders(headerInput); }
+    catch(e) { setHeaderError((e as Error).message); return; }
+    setHeaderError('');
+    field('llmHeaders',headerInput);
+  }
 
   useEffect(()=>{
     if(dirty){setShowSaved(false);return;}
@@ -233,11 +282,11 @@ function SettingsForm({initial,onSave}:{initial:PublicSettings;onSave:(s:PublicS
   },[dirty,showSaved]);
 
   useEffect(()=>{
-    if(!dirty&&!pending)return;
+    if(!dirty&&!pending&&!headerInput.trim())return;
     const warn=(event:BeforeUnloadEvent)=>{event.preventDefault();event.returnValue='';};
     window.addEventListener('beforeunload',warn);
     return()=>window.removeEventListener('beforeunload',warn);
-  },[dirty,pending]);
+  },[dirty,pending,headerInput]);
 
   useEffect(()=>{
     if(!dirty){setError('');return;}
@@ -255,10 +304,11 @@ function SettingsForm({initial,onSave}:{initial:PublicSettings;onSave:(s:PublicS
       try {
         const saved=await api<PublicSettings>('settings','PUT',{...s,languageVoices});
         failedSnapshot.current='';
-        // Keep edits made during the request; only clear keys that were just saved.
-        const metadata={hasLlmKey:saved.hasLlmKey,hasTtsKey:saved.hasTtsKey,envFields:saved.envFields,overriddenFields:saved.overriddenFields};
-        savedSnapshot.current=JSON.stringify({s:{...s,...metadata,llmKey:'',ttsKey:''},voiceRows});
-        setS(current=>({...current,...metadata,llmKey:current.llmKey===s.llmKey?'':current.llmKey,ttsKey:current.ttsKey===s.ttsKey?'':current.ttsKey}));
+        // Keep edits made during the request; clear only the credentials just saved.
+        const metadata={hasLlmKey:saved.hasLlmKey,hasTtsKey:saved.hasTtsKey,hasLlmHeaders:saved.hasLlmHeaders,envFields:saved.envFields,overriddenFields:saved.overriddenFields};
+        savedSnapshot.current=JSON.stringify({s:{...s,...metadata,llmKey:'',ttsKey:'',llmHeaders:''},voiceRows});
+        setS(current=>({...current,...metadata,llmKey:current.llmKey===s.llmKey?'':current.llmKey,ttsKey:current.ttsKey===s.ttsKey?'':current.ttsKey,llmHeaders:current.llmHeaders===s.llmHeaders?'':current.llmHeaders}));
+        if(s.llmHeaders) setHeaderInput(current=>current===s.llmHeaders?'':current);
         setShowSaved(true);
         onSaved.current(saved);
       } catch(e) {
@@ -268,5 +318,18 @@ function SettingsForm({initial,onSave}:{initial:PublicSettings;onSave:(s:PublicS
     },700);
     return()=>clearTimeout(timer);
   },[s,voiceRows,snapshot,dirty,pending,retry]);
-  return <form ref={form} className="settings-form" onSubmit={e=>e.preventDefault()}><section className="settings-section"><h2>Appearance</h2><label>Color mode<select value={s.theme} onChange={e=>field('theme',e.target.value)}><option value="light">Light</option><option value="dark">Dark</option><option value="auto">Automatic (system)</option></select></label></section><div className="settings-grid"><section className="settings-section"><h2>Text preparation</h2><label>LLM base URL<input type="url" required value={s.llmUrl} onChange={e=>field('llmUrl',e.target.value)}/></label><label>Model<input value={s.llmModel} onChange={e=>field('llmModel',e.target.value)} placeholder="Your provider's model ID"/></label><label>API key<input type="password" autoComplete="new-password" value={s.llmKey} onChange={e=>field('llmKey',e.target.value)} placeholder={s.hasLlmKey?'*****':''}/></label></section><section className="settings-section"><h2>Speech output</h2><label>TTS provider<select value={s.ttsProvider} onChange={e=>field('ttsProvider',e.target.value)}><option value="openai">OpenAI-compatible</option><option value="fish">Fish Audio</option></select></label><label>{s.ttsProvider==='fish'?'Fish Audio TTS URL':'TTS base URL'}<input type="url" required value={s.ttsUrl} onChange={e=>field('ttsUrl',e.target.value)}/></label><div className="field-pair"><label>Model<input value={s.ttsModel} onChange={e=>field('ttsModel',e.target.value)} placeholder="TTS model ID"/></label><label>{s.ttsProvider==='fish'?'Default voice (optional reference ID)':'Default voice'}<div className="voice-field"><input required={s.ttsProvider!=='fish'} value={s.voice} onChange={e=>field('voice',e.target.value)} placeholder={s.ttsProvider==='fish'?'Default voice':'Voice ID'}/><VoiceSampleButton key={`${sampleRevision}:${s.voice}`} voice={s.voice} name="Default voice" disabled={samplesDisabled} onError={setError}/></div></label></div><label>API key<input type="password" autoComplete="new-password" value={s.ttsKey} onChange={e=>field('ttsKey',e.target.value)} placeholder={s.hasTtsKey?'*****':''}/></label></section></div><CustomVoices rows={s.customVoices||[]} onChange={customVoices=>setS(prev=>({...prev,customVoices}))} disabled={false} sampleRevision={sampleRevision} samplesDisabled={samplesDisabled} onSampleError={setError}/><LanguageVoices rows={voiceRows} onChange={setVoiceRows} fish={s.ttsProvider==='fish'} disabled={false} sampleRevision={sampleRevision} samplesDisabled={samplesDisabled} onSampleError={setError}/><section className="settings-section"><h2>Concurrent processing</h2><div className="field-pair"><label>Concurrent articles<input type="number" required min={1} max={8} step={1} value={s.articleConcurrency} onChange={e=>field('articleConcurrency',Number(e.target.value))}/></label><label>Concurrent LLM calls<input type="number" required min={1} max={32} step={1} value={s.llmConcurrency} onChange={e=>field('llmConcurrency',Number(e.target.value))}/></label><label>Concurrent TTS calls<input type="number" required min={1} max={32} step={1} value={s.ttsConcurrency} onChange={e=>field('ttsConcurrency',Number(e.target.value))}/></label><label>LLM section length (characters)<input type="number" required min={1000} max={12000} step={1} value={s.llmChunkChars} onChange={e=>field('llmChunkChars',Number(e.target.value))}/></label></div></section><section className="settings-section"><label>System prompt<textarea rows={6} required value={s.prompt} onChange={e=>field('prompt',e.target.value)}/></label></section><section className="settings-section"><h2>Your podcast</h2><div className="field-pair"><label>Feed title<input required value={s.feedTitle} onChange={e=>field('feedTitle',e.target.value)}/></label><label>Accessible app URL<input type="url" value={s.publicUrl} onChange={e=>field('publicUrl',e.target.value)} placeholder="Automatic / server configuration"/></label></div></section><div className="settings-actions"><span className="muted" role="status" style={{minHeight:22}}>{pending?<><LoaderCircle size={14} className="spin"/> Saving…</>:showSaved&&!dirty&&!error?<><Check size={14}/> Saved</>:null}</span></div>{error&&<p className="form-error" role="alert">{error}</p>}{error&&<div className="settings-actions"><button type="button" className="button secondary" onClick={()=>{failedSnapshot.current='';setRetry(value=>value+1);}}>Try again</button></div>}</form>;
+  return <form ref={form} className="settings-form" onSubmit={e=>e.preventDefault()}><section className="settings-section"><h2>Appearance</h2><label>Color mode<select value={s.theme} onChange={e=>field('theme',e.target.value)}><option value="light">Light</option><option value="dark">Dark</option><option value="auto">Automatic (system)</option></select></label></section><div className="settings-grid"><section className="settings-section"><h2>Text preparation</h2><label>LLM base URL<input type="url" required value={s.llmUrl} onChange={e=>field('llmUrl',e.target.value)}/></label><label>Model<input value={s.llmModel} onChange={e=>field('llmModel',e.target.value)} placeholder="Your provider's model ID"/></label><label>API key<input type="password" autoComplete="new-password" value={s.llmKey} onChange={e=>field('llmKey',e.target.value)} placeholder={s.hasLlmKey?'*****':''}/></label>
+      <details className="settings-llm-headers">
+        <summary>Custom LLM headers{s.hasLlmHeaders?' · Configured':''}</summary>
+        <label>Replace headers (JSON)
+          <textarea rows={3} spellCheck={false} autoComplete="off" maxLength={16000} value={headerInput} onChange={e=>{setHeaderInput(e.target.value);setHeaderError('');}} placeholder={'{"X-Client":"redread"}'}/>
+          <small>Saved values are hidden. Enter <code>{'{}'}</code> to clear all headers. Use <code>{'{{session_id}}'}</code> for an automatic session ID.</small>
+        </label>
+        {headerError&&<p className="form-error" role="alert">{headerError}</p>}
+        <button type="button" className="button secondary" disabled={pending||!headerInput.trim()||headerInput===s.llmHeaders} onClick={saveHeaders}>Save headers</button>
+      </details>
+      <ApiTestButton key={JSON.stringify([s.llmUrl,s.llmModel,s.hasLlmKey,!!s.llmKey,s.hasLlmHeaders,!!s.llmHeaders])} provider="llm" disabled={dirty||pending||!!headerInput.trim()}/>
+    </section><section className="settings-section"><h2>Speech output</h2><label>TTS provider<select value={s.ttsProvider} onChange={e=>field('ttsProvider',e.target.value)}><option value="openai">OpenAI-compatible</option><option value="fish">Fish Audio</option></select></label><label>{s.ttsProvider==='fish'?'Fish Audio TTS URL':'TTS base URL'}<input type="url" required value={s.ttsUrl} onChange={e=>field('ttsUrl',e.target.value)}/></label><div className="field-pair"><label>Model<input value={s.ttsModel} onChange={e=>field('ttsModel',e.target.value)} placeholder="TTS model ID"/></label><label>{s.ttsProvider==='fish'?'Default voice (optional reference ID)':'Default voice'}<div className="voice-field"><input required={s.ttsProvider!=='fish'} value={s.voice} onChange={e=>field('voice',e.target.value)} placeholder={s.ttsProvider==='fish'?'Default voice':'Voice ID'}/><VoiceSampleButton key={`${sampleRevision}:${s.voice}`} voice={s.voice} name="Default voice" disabled={samplesDisabled} onError={setError}/></div></label></div><label>API key<input type="password" autoComplete="new-password" value={s.ttsKey} onChange={e=>field('ttsKey',e.target.value)} placeholder={s.hasTtsKey?'*****':''}/></label>{s.ttsProvider==='fish'&&<><label>Temperature (0–1)<input type="number" required min={0} max={1} step="any" value={Number.isFinite(s.fishTemperature)?s.fishTemperature:''} onChange={e=>field('fishTemperature',e.target.value===''?NaN:Number(e.target.value))}/><small>Lower values make speech more consistent. Recommended: 0.4.</small></label><label className="checkbox-row"><input type="checkbox" checked={s.fishNormalize} onChange={e=>field('fishNormalize',e.target.checked)}/><span>Normalize text again in Fish Audio<small>Leave off: redread already prepares numbers and text for speech.</small></span></label></>}
+      <ApiTestButton key={JSON.stringify([sampleRevision,s.voice,s.hasTtsKey,!!s.ttsKey])} provider="tts" disabled={dirty||pending}/>
+    </section></div><CustomVoices rows={s.customVoices||[]} onChange={customVoices=>setS(prev=>({...prev,customVoices}))} disabled={false} sampleRevision={sampleRevision} samplesDisabled={samplesDisabled} onSampleError={setError}/><LanguageVoices rows={voiceRows} onChange={setVoiceRows} fish={s.ttsProvider==='fish'} disabled={false} sampleRevision={sampleRevision} samplesDisabled={samplesDisabled} onSampleError={setError}/><section className="settings-section"><h2>Concurrent processing</h2><div className="field-pair"><label>Concurrent articles<input type="number" required min={1} max={8} step={1} value={s.articleConcurrency} onChange={e=>field('articleConcurrency',Number(e.target.value))}/></label><label>Concurrent LLM calls<input type="number" required min={1} max={32} step={1} value={s.llmConcurrency} onChange={e=>field('llmConcurrency',Number(e.target.value))}/></label><label>Concurrent TTS calls<input type="number" required min={1} max={32} step={1} value={s.ttsConcurrency} onChange={e=>field('ttsConcurrency',Number(e.target.value))}/></label><label>LLM section length (characters)<input type="number" required min={1000} max={12000} step={1} value={s.llmChunkChars} onChange={e=>field('llmChunkChars',Number(e.target.value))}/></label></div></section><section className="settings-section"><label>System prompt<textarea rows={6} required value={s.prompt} onChange={e=>field('prompt',e.target.value)}/></label></section><section className="settings-section"><h2>Your podcast</h2><div className="field-pair"><label>Feed title<input required value={s.feedTitle} onChange={e=>field('feedTitle',e.target.value)}/></label><label>Accessible app URL<input type="url" value={s.publicUrl} onChange={e=>field('publicUrl',e.target.value)} placeholder="Automatic / server configuration"/></label></div></section><div className="settings-actions"><span className="muted" role="status" style={{minHeight:22}}>{pending?<><LoaderCircle size={14} className="spin"/> Saving…</>:showSaved&&!dirty&&!error?<><Check size={14}/> Saved</>:null}</span></div>{error&&<p className="form-error" role="alert">{error}</p>}{error&&<div className="settings-actions"><button type="button" className="button secondary" onClick={()=>{failedSnapshot.current='';setRetry(value=>value+1);}}>Try again</button></div>}</form>;
 }

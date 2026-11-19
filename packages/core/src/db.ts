@@ -6,6 +6,7 @@ import { Article, AudioVersion, PlaybackProgress, PlaybackMutation, ReprocessMod
 import { environmentSettings } from './env';
 import { resolveDataDir } from './data-path';
 import { chaptersFromRecipe } from './chapters';
+import { legacyOpenCodeHeaders } from './llm-headers';
 
 export const dataDir = resolveDataDir(process.cwd(), process.env.DATA_DIR);
 mkdirSync(dataDir, { recursive: true, mode: 0o700 });
@@ -54,7 +55,10 @@ for (const row of db.prepare("SELECT id FROM articles WHERE status='ready' AND a
 }
 function storedSettings(): Partial<Settings> {
   const row = db.prepare('SELECT data FROM settings WHERE id=1').get() as {data: string} | undefined;
-  return row ? JSON.parse(row.data) : {};
+  if (!row) return {};
+  const {llmOpenCodeSession, ...saved} = JSON.parse(row.data) as Partial<Settings> & {llmOpenCodeSession?: boolean};
+  if (saved.llmHeaders === undefined && llmOpenCodeSession !== undefined) saved.llmHeaders = llmOpenCodeSession ? legacyOpenCodeHeaders : {};
+  return saved;
 }
 export function settings(): Settings {
   return { ...defaults, ...environmentSettings(), ...storedSettings() };
@@ -64,7 +68,7 @@ export function resetSettings() {
 }
 export function publicSettings() {
   const s = settings();
-  return { ...s, llmKey: '', ttsKey: '', hasLlmKey: !!s.llmKey, hasTtsKey: !!s.ttsKey, envFields: Object.keys(environmentSettings()), overriddenFields: Object.keys(storedSettings()) };
+  return { ...s, llmKey: '', ttsKey: '', llmHeaders: '', hasLlmHeaders: Object.keys(s.llmHeaders).length > 0, hasLlmKey: !!s.llmKey, hasTtsKey: !!s.ttsKey, envFields: Object.keys(environmentSettings()), overriddenFields: Object.keys(storedSettings()) };
 }
 export function saveSettings(s: Settings) {
   // Persist overrides shared by web and worker across restarts. Never change .env

@@ -1,15 +1,10 @@
 import type { AudioChapter } from './types';
 
-export const chapterPrompt = `Navigation format (takes precedence over conflicting formatting instructions above): Preserve every actual chapter or section heading from the source on its own line as "## Heading [break]". Always include the [break] pause marker immediately after the heading text. Keep its original language and wording, apart from necessary speech normalization. Use consistent titles without leading outline numbers: write "Ziele" instead of "2.2 Ziele" or "Zwei Punkt zwei: Ziele". Omit these structural prefixes from all headings, including top-level ones; do not spell them out. Preserve meaningful labels within a title, such as "Forschungsfrage eins" or "Arbeitspaket zwei". Recognize both Markdown headings and clearly identifiable plain-text headings. Do not invent headings, turn ordinary paragraphs into headings, or add headings at excerpt boundaries. If an excerpt continues a section, continue its prose without repeating the heading. Keep the heading text and its [break] pause marker in the spoken content; only the ## prefix is navigation metadata. The [break] marker is not part of the chapter title. Text without headings must remain without headings.`;
+export const chapterPrompt = `Navigation format (takes precedence over conflicting formatting instructions above): Preserve every actual chapter or section heading from the source on its own line as "## Heading [break]". Always include the [break] pause marker immediately after the heading text. Keep its original language and wording, apart from necessary speech normalization. Preserve leading chapter and section numbers in all headings, including top-level and nested outline numbers. Write them out for speech in the source language, for example "2.2 Ziele" as "Zwei Punkt zwei: Ziele". Never omit or renumber these structural prefixes. Preserve meaningful labels within a title, such as "Forschungsfrage eins" or "Arbeitspaket zwei". Recognize both Markdown headings and clearly identifiable plain-text headings. Do not invent headings, turn ordinary paragraphs into headings, or add headings at excerpt boundaries. If an excerpt continues a section, continue its prose without repeating the heading. Keep the heading text and its [break] pause marker in the spoken content; only the ## prefix is navigation metadata. The [break] marker is not part of the chapter title. Text without headings must remain without headings.`;
 
-const numericPrefix = /^\d+(?:\.\d+)*(?:[.):]\s*|\s+)/u;
-const numberWords = 'eins|zwei|drei|vier|fünf|sechs|sieben|acht|neun|zehn|elf|zwölf';
-const spokenPrefix = new RegExp(`^(?:${numberWords})(?:\\s+Punkt\\s+(?:${numberWords}))*(?:[.):]\\s*|\\s+)`, 'iu');
-
-/** The player already numbers chapters; keep outline numbers out of their titles. */
+/** Keep source numbering; only pause markers are not part of the title. */
 function chapterTitle(title: string): string {
-  const text = title.replace(/\[break\]/gi, '').replace(/\s+/g, ' ').trim();
-  return text.replace(numericPrefix, '').replace(spokenPrefix, '').trim() || text;
+  return title.replace(/\[break\]/gi, '').replace(/\s+/g, ' ').trim();
 }
 
 /** Technical chunk boundaries are never chapter boundaries. */

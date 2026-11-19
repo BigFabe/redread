@@ -7,6 +7,8 @@ import { reprocessArticle, listAudioVersions, audioAsset, serverId, getPlayback,
 import { languageVoices } from '@redread/core/language';
 import { customVoices } from '@redread/core/voices';
 import { createVoiceSample, listVoiceSamples, voiceSampleFile } from '@redread/core/voice-samples';
+import { prepareText, speech } from '@redread/core/pipeline';
+import { parseLlmHeaders } from '@redread/core/llm-headers';
 import { extractArticle } from '@redread/core/extract';
 import { extensionOrigin, extensionImport } from '@redread/core/extension-access';
 export const runtime = 'nodejs';
@@ -18,7 +20,9 @@ const settingsSchema = z.object({
   ttsProvider: z.enum(['openai','fish']).default('openai'),
   llmUrl: httpUrl, ttsUrl: httpUrl, llmModel: z.string().trim().max(200), ttsModel: z.string().trim().max(200),
   llmKey: z.string().max(2000).optional(), ttsKey: z.string().max(2000).optional(),
+  llmHeaders: z.string().trim().max(16000).optional(),
   clearLlmKey: z.boolean().optional(), clearTtsKey: z.boolean().optional(),
+  fishNormalize: z.boolean().optional(), fishTemperature: z.number().min(0).max(1).optional(),
   prompt: z.string().trim().min(1).max(20000), voice:z.string().trim().max(200),
   languageVoices: z.record(z.string(),z.string()).optional(),
   customVoices: z.array(z.object({name:z.string(),voice:z.string()})).max(100).optional(),
@@ -62,14 +66,37 @@ async function handleRequest(req: Request, context: Context) {
         return new Response(req.method === 'HEAD' ? null : Readable.toWeb(createReadStream(file)) as ReadableStream, {headers:{'Content-Type':'audio/mpeg','Content-Length':String(statSync(file).size),'Cache-Control':'private, max-age=31536000, immutable'}});
       }
     }
+    if (resource === 'settings' && action === 'test' && path.length === 3 && req.method === 'POST' && (id === 'llm' || id === 'tts')) {
+      const s = settings();
+      if (!(id === 'llm' ? s.llmModel : s.ttsModel)?.trim()) return json({error:`Enter a ${id.toUpperCase()} model before testing.`},400);
+      const timeout = AbortSignal.timeout(30000);
+      const signal = AbortSignal.any([req.signal, timeout]);
+      try {
+        if (id === 'llm') {
+          await prepareText({...s,prompt:'Reply with the word OK.'}, 'This is a Redread API test.', signal);
+          return json({message:'The model returned text.'});
+        }
+        const response = await speech(s, 'This is a Redread audio test.', signal);
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        const mp3 = bytes.length >= 4 && ((bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) || (bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0));
+        if (!mp3) return json({error:'The TTS provider did not return MP3 audio. Check the provider, URL, and model.'},502);
+        return json({message:'The provider returned audio.'});
+      } catch (error) {
+        if (timeout.aborted) return json({error:'The provider did not respond within 30 seconds.'},504);
+        if (error instanceof SyntaxError) return json({error:'The provider returned invalid JSON. Check the LLM base URL.'},502);
+        if (error instanceof TypeError) return json({error:'The provider request failed. Check the URL and make sure the server can reach it.'},502);
+        return json({error:error instanceof Error ? error.message : 'The provider test failed.'},502);
+      }
+    }
     if (resource === 'settings' && req.method === 'GET') return json(publicSettings());
     if (resource === 'settings' && req.method === 'DELETE') { resetSettings(); return json(publicSettings()); }
     if (resource === 'settings' && req.method === 'PUT') {
       const input = settingsSchema.parse(await req.json()); const current = settings();
-      const {clearLlmKey,clearTtsKey,...values} = input;
+      const {clearLlmKey,clearTtsKey,llmHeaders,...values} = input;
       values.languageVoices=languageVoices(input.languageVoices ?? current.languageVoices);
       values.customVoices=customVoices(input.customVoices ?? current.customVoices);
-      saveSettings({...current,...values,llmKey:clearLlmKey ? '' : input.llmKey || current.llmKey, ttsKey:clearTtsKey ? '' : input.ttsKey || current.ttsKey});
+      const headers = llmHeaders ? parseLlmHeaders(llmHeaders) : current.llmHeaders;
+      saveSettings({...current,...values,llmHeaders:headers,llmKey:clearLlmKey ? '' : input.llmKey || current.llmKey, ttsKey:clearTtsKey ? '' : input.ttsKey || current.ttsKey});
       return json(publicSettings());
     }
     if (resource !== 'articles') return json({error:'Not found.'},404);

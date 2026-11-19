@@ -10,6 +10,7 @@ import { createLimiter, mapConcurrent } from './concurrency';
 import { languagePrompt, parseDetectedLanguage, voiceForLanguage } from './language';
 import { normalizeArticleText } from './text';
 import { chapterPrompt, chapterSections, chapterMetadata } from './chapters';
+import { sessionPlaceholder } from './llm-headers';
 const exec = promisify(execFile);
 const noSpokenContent = '[[NO_SPOKEN_CONTENT]]';
 // Global within the single worker process, not multiplied by active articles.
@@ -65,9 +66,10 @@ async function provider(url: string, path: string, key: string, body: object, he
   }
   return response;
 }
-export async function prepareText(s: Settings, input: string, signal?: AbortSignal) {
+export async function prepareText(s: Settings, input: string, signal?: AbortSignal, sessionId?: string) {
+  const headers = Object.fromEntries(Object.entries(s.llmHeaders).map(([name,value]) => [name,value.replaceAll(sessionPlaceholder, () => sessionId ??= randomUUID())]));
   for (let attempt = 0; attempt < 2; attempt++) {
-    const response = await provider(s.llmUrl, 'chat/completions', s.llmKey, {model: s.llmModel, messages: [{role:'system',content:s.prompt},{role:'user',content:input}]}, {}, signal);
+    const response = await provider(s.llmUrl, 'chat/completions', s.llmKey, {model: s.llmModel, messages: [{role:'system',content:s.prompt},{role:'user',content:input}]}, headers, signal);
     const json = await response.json();
     const choice = json.choices?.[0];
     const error = json.error || choice?.error;
@@ -88,14 +90,14 @@ export async function prepareText(s: Settings, input: string, signal?: AbortSign
 }
 export function speech(s: Settings, text: string, signal?: AbortSignal) {
   if (s.ttsProvider === 'fish') {
-    return provider(s.ttsUrl, '', s.ttsKey, {text, format: 'mp3', ...(s.voice ? {reference_id: s.voice} : {})}, {model: s.ttsModel}, signal);
+    return provider(s.ttsUrl, '', s.ttsKey, {text, format: 'mp3', normalize: s.fishNormalize, temperature: s.fishTemperature, ...(s.voice ? {reference_id: s.voice} : {})}, {model: s.ttsModel}, signal);
   }
   return provider(s.ttsUrl, 'audio/speech', s.ttsKey, {model: s.ttsModel, voice: s.voice, input: text, response_format: 'mp3'}, {}, signal);
 }
-export async function detectLanguage(s: Settings, original: string, signal?: AbortSignal): Promise<string> {
+export async function detectLanguage(s: Settings, original: string, signal?: AbortSignal, sessionId?: string): Promise<string> {
   const text=normalizeArticleText(original);
   const sample=text.length<=6000?text:[text.slice(0,2000),text.slice(Math.floor(text.length/2)-1000,Math.floor(text.length/2)+1000),text.slice(-2000)].join('\n\n[...]\n\n');
-  return parseDetectedLanguage(await llmSlot(()=>prepareText({...s,prompt:languagePrompt},sample,signal),signal));
+  return parseDetectedLanguage(await llmSlot(()=>prepareText({...s,prompt:languagePrompt},sample,signal,sessionId),signal));
 }
 async function audioDuration(file: string, signal?: AbortSignal) {
   const {stdout} = await exec('ffprobe', ['-v','error','-show_entries','format=duration','-of','default=noprint_wrappers=1:nokey=1',file], {timeout:30000, signal});
@@ -110,16 +112,17 @@ export async function processArticle(article: Article, signal?: AbortSignal) {
   };
   signal?.throwIfAborted();
   const s = settings();
+  const sessionId = randomUUID();
   const dir = articleDir(article.id);
   let language=article.language;
   if (!language) {
     update({progress:'Detecting language'});
-    language=await detectLanguage(s,article.original,signal);
+    language=await detectLanguage(s,article.original,signal,sessionId);
     update({language});
   }
   s.voice=article.voice||voiceForLanguage(language,s.languageVoices,s.voice);
   const textSettings = {...s, prompt: `${s.prompt}\n\n${chapterPrompt}\n\nIf this excerpt contains only material that the instructions above require you to remove (for example, bibliographic references), return exactly ${noSpokenContent} and nothing else. Use this marker only when no spoken content remains, never for substantive prose. Do not return an empty response. Omit headings that belong only to removed material.`};
-  const recipe = {llmUrl: s.llmUrl, llmModel: s.llmModel, prompt: textSettings.prompt, ttsProvider: s.ttsProvider, ttsUrl: s.ttsUrl, ttsModel: s.ttsModel, voice: s.voice, language};
+  const recipe = {llmUrl: s.llmUrl, llmModel: s.llmModel, prompt: textSettings.prompt, ttsProvider: s.ttsProvider, ttsUrl: s.ttsUrl, ttsModel: s.ttsModel, voice: s.voice, language, ...(s.ttsProvider === 'fish' ? {fishNormalize: s.fishNormalize, fishTemperature: s.fishTemperature} : {})};
   update({recipe: JSON.stringify(recipe)});
   let script = article.script;
   if (!script) {
@@ -136,7 +139,7 @@ export async function processArticle(article: Article, signal?: AbortSignal) {
         job = (async () => {
           const file = join(dir, `text-${hash}.txt`);
           if (existsSync(file)) return readFileSync(file, 'utf8');
-          const output = await llmSlot(() => prepareText(textSettings, part, signal), signal);
+          const output = await llmSlot(() => prepareText(textSettings, part, signal, sessionId), signal);
           const text = output === noSpokenContent ? '' : output;
           signal?.throwIfAborted();
           writeFileSync(file, text, {mode: 0o600});
@@ -168,7 +171,7 @@ export async function processArticle(article: Article, signal?: AbortSignal) {
   update({progress: `Audio · 0 of ${parts.length} sections complete`});
   const files = await mapConcurrent(parts, 32, async part => {
     signal?.throwIfAborted();
-    const hash = createHash('sha256').update(JSON.stringify([s.ttsProvider,s.ttsUrl,s.ttsModel,s.voice,part.text])).digest('hex');
+    const hash = createHash('sha256').update(JSON.stringify([s.ttsProvider,s.ttsUrl,s.ttsModel,s.voice,part.text,...(s.ttsProvider === 'fish' ? [s.fishNormalize,s.fishTemperature] : [])])).digest('hex');
     let job = pendingAudio.get(hash);
     if (!job) {
       job = (async () => {

@@ -57,6 +57,7 @@ adb install -r apps/android/build/redread.apk
 The web app and worker load the repository's `.env` file at startup. Use `.env.example` as a template. The actual file is ignored by Git and should be readable only by its owner (`chmod 600 .env`).
 
 - `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY`: OpenRouter or another OpenAI-compatible provider.
+- `LLM_HEADERS`: optional JSON object of additional headers for the LLM, e.g. `'{"X-Client":"redread","X-Session":"{{session_id}}"}'`. Use **Custom LLM headers** under Settings → Text preparation to replace the stored set; enter `{}` to clear it. Values are not shown again after saving. `{{session_id}}` stays the same within an article processing run or LLM API test.
 - `TTS_PROVIDER=fish` or `openai`, `TTS_URL`, `TTS_MODEL`, `TTS_API_KEY`.
 - `TTS_VOICE`: Fish `reference_id` (optional) or an OpenAI voice ID.
 - `TTS_CUSTOM_VOICES`: named voices as a JSON list, for example `'[{"name":"Narrator","voice":"reference-id"}]'`. Editable as a table under “Custom voices”; the web app and extension popup offer these voices before processing starts. A voice stored for an article takes precedence over language mapping and the default voice, including when processing resumes. Without a selection, the previous behavior remains unchanged. IDs must match the active TTS provider. Like all saved web app settings, the list persists across restarts.

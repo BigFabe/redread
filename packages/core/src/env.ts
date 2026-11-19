@@ -4,6 +4,7 @@ import { loadEnvFile } from 'node:process';
 import type { Settings } from './types';
 import { languageVoices } from './language';
 import { customVoices } from './voices';
+import { legacyOpenCodeHeaders, parseLlmHeaders } from './llm-headers';
 
 // Web/worker workspace commands and direct commands from the repository root.
 const paths = process.env.REDREAD_ENV_FILE !== undefined
@@ -46,6 +47,22 @@ export function environmentSettings(): Partial<Settings> {
   }
   for (const [field, [name, fallback, min, max]] of Object.entries(numericNames)) {
     if (process.env[name] !== undefined) result[field] = integerSetting(name, fallback, min, max);
+  }
+  if (process.env.LLM_HEADERS !== undefined) {
+    try { result.llmHeaders = parseLlmHeaders(process.env.LLM_HEADERS); }
+    catch(error) { throw new Error(`LLM_HEADERS: ${(error as Error).message}`); }
+  } else if (process.env.LLM_OPENCODE_SESSION === 'true') {
+    result.llmHeaders = legacyOpenCodeHeaders;
+  }
+  if (process.env.TTS_FISH_NORMALIZE !== undefined) {
+    const value = process.env.TTS_FISH_NORMALIZE;
+    if (value !== 'true' && value !== 'false') throw new Error('TTS_FISH_NORMALIZE must be true or false.');
+    result.fishNormalize = value === 'true';
+  }
+  if (process.env.TTS_FISH_TEMPERATURE !== undefined) {
+    const value = Number(process.env.TTS_FISH_TEMPERATURE);
+    if (!process.env.TTS_FISH_TEMPERATURE.trim() || !Number.isFinite(value) || value < 0 || value > 1) throw new Error('TTS_FISH_TEMPERATURE must be a number between 0 and 1.');
+    result.fishTemperature = value;
   }
   if (result.ttsProvider && !['openai','fish'].includes(String(result.ttsProvider))) throw new Error('TTS_PROVIDER must be openai or fish.');
   if (result.theme !== undefined && !['light','dark','auto'].includes(String(result.theme))) throw new Error('UI_THEME must be light, dark, or auto.');

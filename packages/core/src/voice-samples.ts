@@ -9,7 +9,7 @@ export const sampleText = 'Hallo, so klingt meine Stimme. Mit redread kannst du 
 const pending = new Map<string, Promise<string>>();
 
 function sampleId(s: Settings, voice: string) {
-  return createHash('sha256').update(JSON.stringify([s.ttsProvider, s.ttsUrl, s.ttsModel, voice, sampleText])).digest('hex');
+  return createHash('sha256').update(JSON.stringify([s.ttsProvider, s.ttsUrl, s.ttsModel, voice, sampleText, ...(s.ttsProvider === 'fish' ? [s.fishNormalize, s.fishTemperature] : [])])).digest('hex');
 }
 export function voiceSampleFile(id: string) {
   if (!/^[a-f0-9]{64}$/.test(id)) throw new Error('Invalid voice sample ID.');
